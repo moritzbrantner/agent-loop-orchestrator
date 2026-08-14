@@ -55,12 +55,12 @@ fi
 if ((INSTALL_PROVIDERS == 1)); then
   if ! command -v codex >/dev/null; then
     echo "Installing Codex CLI with the official standalone installer..."
-    curl --proto '=https' --tlsv1.2 -fsS https://chatgpt.com/codex/install.sh -o "${TEMP_DIR}/codex-install.sh"
+    curl --proto '=https' --tlsv1.2 -fsSL https://chatgpt.com/codex/install.sh -o "${TEMP_DIR}/codex-install.sh"
     sh "${TEMP_DIR}/codex-install.sh"
   fi
   if ! command -v claude >/dev/null; then
     echo "Installing Claude Code stable with the official native installer..."
-    curl --proto '=https' --tlsv1.2 -fsS https://claude.ai/install.sh -o "${TEMP_DIR}/claude-install.sh"
+    curl --proto '=https' --tlsv1.2 -fsSL https://claude.ai/install.sh -o "${TEMP_DIR}/claude-install.sh"
     bash "${TEMP_DIR}/claude-install.sh" stable
   fi
 fi

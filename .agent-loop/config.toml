@@ -1,0 +1,25 @@
+version = 1
+
+[project]
+id = "agent-loop-orchestrator"
+
+[agent]
+provider = "codex"
+max_duration_seconds = 7200
+
+[providers.codex]
+executable = "codex"
+reasoning_effort = "high"
+sandbox = "workspace-write"
+approval_policy = "never"
+
+[providers.claude]
+executable = "claude"
+effort = "high"
+permission_mode = "dontAsk"
+allowed_tools = [
+    "Bash",
+    "Edit",
+    "Read",
+    "Write",
+]
