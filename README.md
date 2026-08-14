@@ -8,10 +8,57 @@ The orchestrator is the local system of record that connects the rest of the cod
 | --- | --- |
 | `coding-agent-conventions` | Policy, principles, convention profiles, and stable convention IDs |
 | `coding-tooling` | Deterministic repository discovery, affected-scope analysis, and checks |
-| `agent-loop-setup` | Installable skills, worker procedures, repository bootstrap, and provider adapters |
-| `agent-loop-orchestrator` | Tasks, dependencies, scheduling, run state, authority, evidence, decisions, and integration |
+| `agent-loop-setup` | Reusable worker procedures and environment-specific installation composition |
+| `agent-loop-orchestrator` | Repository bootstrap, execution adapters, tasks, scheduling, run state, authority, evidence, decisions, and integration |
 | `moonlight` | Baseline/candidate comparison and evaluation |
 | `local-refactor` | A specialized refactoring worker |
+
+## Install once
+
+On macOS, Linux, or WSL:
+
+```bash
+git clone git@github.com:moritzbrantner/agent-loop-orchestrator.git
+cd agent-loop-orchestrator
+./setup.sh
+```
+
+The script installs a minimal Rust toolchain when necessary, installs missing Claude Code and Codex CLIs from their official installers, builds `agent-loop`, installs it under `~/.local/bin`, and installs completion definitions for Bash, Zsh, or Fish. Use `--skip-providers` or `--skip-rust` when those dependencies are managed elsewhere.
+
+Provider authentication remains an explicit one-time user action:
+
+```bash
+codex login
+claude
+```
+
+## Add a repository
+
+From any Git repository:
+
+```bash
+agent-loop init
+agent-loop doctor
+```
+
+`init` creates the versioned `.agent-loop/config.toml`, ignores local run evidence, and registers the repository in the per-user orchestrator registry. It does not overwrite an existing configuration unless you pass `--force`.
+
+Run a task with the configured provider or choose one for a single run:
+
+```bash
+agent-loop run --prompt "Implement the next ready task"
+agent-loop run --provider claude --effort max --prompt-file task.md
+agent-loop run --provider codex --effort xhigh --prompt "Review the candidate"
+```
+
+Continue the same provider session:
+
+```bash
+agent-loop run --provider codex --resume <thread-id> --prompt "Apply the review findings"
+agent-loop run --provider claude --resume <session-id> --prompt "Run the final checks"
+```
+
+See [Claude and Codex adapters](docs/providers.md) for command mappings, permission defaults, event normalization, and the authority boundary.
 
 ## Shared run contract
 
@@ -28,7 +75,7 @@ The schema is the interchange boundary. Database tables, HTTP payloads, internal
 1. Create a work item with dependencies and declared scope.
 2. Select it when dependency-ready.
 3. Create an isolated Git worktree.
-4. start one worker with explicit authority.
+4. Start one worker with explicit authority.
 5. Discover and run deterministic capabilities through `coding-tooling`.
 6. Record the resulting commit or patch as a candidate.
 7. Evaluate baseline against candidate through Moonlight.
