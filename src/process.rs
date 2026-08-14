@@ -81,7 +81,9 @@ pub fn execute(
     while !(stdout_closed && stderr_closed) {
         if started.elapsed() >= timeout {
             timed_out = true;
-            child.kill().context("terminate timed-out provider process")?;
+            child
+                .kill()
+                .context("terminate timed-out provider process")?;
             break;
         }
 
@@ -185,7 +187,10 @@ fn spawn_reader(
 
 fn ensure_success(status: ExitStatus, timed_out: bool, run_directory: &Path) -> Result<()> {
     if timed_out {
-        bail!("provider timed out; evidence saved in {}", run_directory.display());
+        bail!(
+            "provider timed out; evidence saved in {}",
+            run_directory.display()
+        );
     }
     if !status.success() {
         bail!(

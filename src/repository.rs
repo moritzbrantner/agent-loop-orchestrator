@@ -95,4 +95,3 @@ fn register(project_id: &str, repository_root: &Path) -> Result<()> {
     fs::write(&path, serde_json::to_vec_pretty(&registry)?)
         .with_context(|| format!("write {}", path.display()))
 }
-

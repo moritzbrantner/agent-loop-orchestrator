@@ -1,10 +1,4 @@
-use std::{
-    fs,
-    io,
-    path::PathBuf,
-    str::FromStr,
-    time::Duration,
-};
+use std::{fs, io, path::PathBuf, str::FromStr, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
@@ -14,8 +8,7 @@ use uuid::Uuid;
 use crate::{
     adapters::{Provider, RunRequest, adapter},
     config::ProjectConfig,
-    doctor,
-    process,
+    doctor, process,
     repository::{self, find_repository_root},
 };
 
@@ -144,10 +137,7 @@ pub fn run() -> Result<()> {
             json,
             repository,
         } => {
-            let provider = provider
-                .as_deref()
-                .map(Provider::from_str)
-                .transpose()?;
+            let provider = provider.as_deref().map(Provider::from_str).transpose()?;
             let config = find_repository_root(&repository)
                 .ok()
                 .and_then(|root| ProjectConfig::load(&root).ok());

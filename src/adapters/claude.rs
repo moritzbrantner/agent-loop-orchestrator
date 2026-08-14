@@ -71,11 +71,21 @@ mod tests {
             effort_override: Some("max"),
         };
         let command = ClaudeAdapter.command(&config, &request).unwrap();
-        let args: Vec<_> = command.args.iter().map(|arg| arg.to_string_lossy()).collect();
+        let args: Vec<_> = command
+            .args
+            .iter()
+            .map(|arg| arg.to_string_lossy())
+            .collect();
         assert!(args.iter().any(|arg| arg == "--print"));
-        assert!(args.windows(2).any(|pair| pair == ["--output-format", "stream-json"]));
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--output-format", "stream-json"])
+        );
         assert!(args.iter().any(|arg| arg == "--verbose"));
-        assert!(args.windows(2).any(|pair| pair == ["--permission-mode", "dontAsk"]));
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--permission-mode", "dontAsk"])
+        );
         assert!(args.windows(2).any(|pair| pair == ["--effort", "max"]));
     }
 
@@ -90,9 +100,14 @@ mod tests {
             effort_override: None,
         };
         let command = ClaudeAdapter.command(&config, &request).unwrap();
-        let args: Vec<_> = command.args.iter().map(|arg| arg.to_string_lossy()).collect();
-        assert!(args.windows(2).any(|pair| {
-            pair == ["--resume", "550e8400-e29b-41d4-a716-446655440000"]
-        }));
+        let args: Vec<_> = command
+            .args
+            .iter()
+            .map(|arg| arg.to_string_lossy())
+            .collect();
+        assert!(
+            args.windows(2)
+                .any(|pair| { pair == ["--resume", "550e8400-e29b-41d4-a716-446655440000"] })
+        );
     }
 }

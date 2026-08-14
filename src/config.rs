@@ -133,7 +133,12 @@ impl ProjectConfig {
                     effort: Some("high".into()),
                     // dontAsk fails closed instead of hanging on an interactive prompt.
                     permission_mode: ClaudePermissionMode::DontAsk,
-                    allowed_tools: vec!["Bash".into(), "Edit".into(), "Read".into(), "Write".into()],
+                    allowed_tools: vec![
+                        "Bash".into(),
+                        "Edit".into(),
+                        "Read".into(),
+                        "Write".into(),
+                    ],
                 },
             },
         }
@@ -143,8 +148,8 @@ impl ProjectConfig {
         let path = repository_root.join(".agent-loop/config.toml");
         let contents = fs::read_to_string(&path)
             .with_context(|| format!("read {} (run `agent-loop init` first)", path.display()))?;
-        let config: Self = toml::from_str(&contents)
-            .with_context(|| format!("parse {}", path.display()))?;
+        let config: Self =
+            toml::from_str(&contents).with_context(|| format!("parse {}", path.display()))?;
         config.validate()?;
         Ok(config)
     }
@@ -209,4 +214,3 @@ mod tests {
         assert!(validate_claude_effort(Some("minimal")).is_err());
     }
 }
-

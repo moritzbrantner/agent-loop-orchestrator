@@ -74,12 +74,25 @@ mod tests {
             effort_override: Some("xhigh"),
         };
         let command = CodexAdapter.command(&config, &request).unwrap();
-        let args: Vec<_> = command.args.iter().map(|arg| arg.to_string_lossy()).collect();
+        let args: Vec<_> = command
+            .args
+            .iter()
+            .map(|arg| arg.to_string_lossy())
+            .collect();
         assert_eq!(args[0], "exec");
         assert!(args.iter().any(|arg| arg == "--json"));
-        assert!(args.windows(2).any(|pair| pair == ["--sandbox", "workspace-write"]));
-        assert!(args.windows(2).any(|pair| pair == ["--ask-for-approval", "never"]));
-        assert!(args.iter().any(|arg| arg == "model_reasoning_effort=\"xhigh\""));
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--sandbox", "workspace-write"])
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--ask-for-approval", "never"])
+        );
+        assert!(
+            args.iter()
+                .any(|arg| arg == "model_reasoning_effort=\"xhigh\"")
+        );
     }
 
     #[test]
@@ -93,9 +106,14 @@ mod tests {
             effort_override: None,
         };
         let command = CodexAdapter.command(&config, &request).unwrap();
-        let args: Vec<_> = command.args.iter().map(|arg| arg.to_string_lossy()).collect();
-        assert!(args.windows(2).any(|pair| {
-            pair == ["resume", "0199a213-81c0-7800-8aa1-bbab2a035a53"]
-        }));
+        let args: Vec<_> = command
+            .args
+            .iter()
+            .map(|arg| arg.to_string_lossy())
+            .collect();
+        assert!(
+            args.windows(2)
+                .any(|pair| { pair == ["resume", "0199a213-81c0-7800-8aa1-bbab2a035a53"] })
+        );
     }
 }

@@ -34,7 +34,11 @@ pub fn run(config: Option<&ProjectConfig>, requested: Option<Provider>, json: bo
         println!("{}", serde_json::to_string_pretty(&diagnostics)?);
     } else {
         for diagnostic in &diagnostics {
-            let state = if diagnostic.authenticated { "ready" } else { "not ready" };
+            let state = if diagnostic.authenticated {
+                "ready"
+            } else {
+                "not ready"
+            };
             println!("{}: {state}", diagnostic.provider);
             println!("  executable: {}", diagnostic.executable);
             if let Some(path) = &diagnostic.found_at {
@@ -49,7 +53,10 @@ pub fn run(config: Option<&ProjectConfig>, requested: Option<Provider>, json: bo
         }
     }
 
-    if diagnostics.iter().any(|diagnostic| !diagnostic.authenticated) {
+    if diagnostics
+        .iter()
+        .any(|diagnostic| !diagnostic.authenticated)
+    {
         bail!("one or more requested providers are not ready");
     }
     Ok(())
@@ -128,4 +135,3 @@ fn command_text(executable: &OsStr, args: &[&str]) -> std::result::Result<String
 fn command_success(executable: &OsStr, args: &[&str]) -> std::result::Result<(), String> {
     command_text(executable, args).map(|_| ())
 }
-
