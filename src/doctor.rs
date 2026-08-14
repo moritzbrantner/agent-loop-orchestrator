@@ -1,6 +1,6 @@
 use std::{
     env,
-    ffi::{OsStr, OsString},
+    ffi::OsString,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -121,7 +121,7 @@ fn executable_candidates(directory: &Path, executable: &str) -> Vec<PathBuf> {
     candidates
 }
 
-fn command_text(executable: &OsStr, args: &[&str]) -> std::result::Result<String, String> {
+fn command_text(executable: &Path, args: &[&str]) -> std::result::Result<String, String> {
     let output = Command::new(executable)
         .args(args)
         .output()
@@ -132,6 +132,6 @@ fn command_text(executable: &OsStr, args: &[&str]) -> std::result::Result<String
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
-fn command_success(executable: &OsStr, args: &[&str]) -> std::result::Result<(), String> {
+fn command_success(executable: &Path, args: &[&str]) -> std::result::Result<(), String> {
     command_text(executable, args).map(|_| ())
 }
