@@ -1,0 +1,15 @@
+{
+  "source": "https://github.com/moritzbrantner/agent-contracts",
+  "revision": "cf0d0c15a743cbf5358f4f3bdd83f38b6371cd98",
+  "generatedBy": "git clone --no-checkout; git checkout --detach <revision>",
+  "files": [
+    { "path": "schemas/authority/v1.schema.json", "sha256": "8315552b74023eb5b073f7df336aaa1ba325b0044d3c374dbe23e896f232ab2b" },
+    { "path": "schemas/candidate/v1.schema.json", "sha256": "a0a599d6927c968e11f6083235c1affdadc7c9ff4525a2b6d7e98fb7b560a529" },
+    { "path": "schemas/component/lock-v1.schema.json", "sha256": "7ab36820a96c1d745f97c013f104ed35c05c592879fe6ed44bf36a390cc88a15" },
+    { "path": "schemas/evaluation/result-v1.schema.json", "sha256": "e3a2d2499f5741ebd6ffc4b450b1436a94148598458200aaa754d3d8b5515cd6" },
+    { "path": "schemas/evidence-v1.schema.json", "sha256": "bd5ebac98d98e03656d07a28f079e1544e3f37ba7bf8756935ad997e73485e92" },
+    { "path": "schemas/run/v1.schema.json", "sha256": "6e1eeeedf6487fc8340280d212c35f51c94387ebbde26b821d50b133140733bb" },
+    { "path": "schemas/task-packet/v1.schema.json", "sha256": "d263745c799ef536f7635f000aa146362dc76b5447660c8c6a027988e4142296" },
+    { "path": "schemas/tooling/check-result-v1.schema.json", "sha256": "dc01a5d1f047368d338aea386743d6a9a270af6f88b4f2b338e56836e452e8c5" }
+  ]
+}

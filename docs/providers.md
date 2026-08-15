@@ -18,15 +18,16 @@ The adapter extracts `session_id` from Claude's stream events. A follow-up run p
 
 ## Evidence
 
-Every run writes these files under `.agent-loop/runs/<run-id>/`:
+Every Run writes these files under `.agent-loop/runs/<run-id>/`:
 
+- `run.json`: canonical `agent.run/v1` aggregate
+- `component-lock.json`: canonical `agent.component-lock/v1` used by that Run
 - `raw.jsonl`: the provider's original stdout stream
 - `events.jsonl`: provider-neutral envelopes containing the original event
 - `stderr.log`: provider diagnostics
-- `outcome.json`: provider, session ID, exit code, timeout state, and evidence path
 
 The run fails when the executable is missing, configuration is invalid, the process times out, or the provider exits unsuccessfully. A non-JSON stdout line is preserved and represented as a parse-error event instead of being discarded.
 
 ## Authority boundary
 
-Provider flags are only one enforcement layer. Filesystem roots outside the repository, domain allowlists, secrets, and publication rights from the shared run contract must be materialized by the orchestrator's workspace/container layer before starting an adapter. An adapter must not claim that a provider flag enforces an authority it cannot enforce.
+Provider flags are only one enforcement layer. Filesystem roots outside the Registered Project, domain allowlists, secrets, and publication rights from `agent.authority/v1` must be materialized by the orchestrator isolation/container layer before starting an adapter. An adapter must not claim that a provider flag enforces an authority it cannot enforce.

@@ -83,15 +83,11 @@ The command generates and displays a fresh access token in the terminal. Open `h
 
 For frontend development, run `bun run dev` from `web/` while the Rust service is running; Vite proxies `/api` requests to it.
 
-## Shared run contract
+## Interchange contracts
 
-Every execution is represented by a versioned, provider-neutral run contract. It binds the work item, baseline, agent identity, allowed authority, attempts, candidate, checks, evaluations, decisions, and publication to one durable record.
+[`moritzbrantner/agent-contracts`](https://github.com/moritzbrantner/agent-contracts) owns all interchange semantics. This orchestrator pins revision `cf0d0c15a743cbf5358f4f3bdd83f38b6371cd98` and emits `agent.run/v1`, with its `agent.authority/v1`, `agent.task-packet/v1`, `agent.candidate/v1`, and `agent.component-lock/v1` records. The local [checksum-verified snapshot](contracts/agent-contracts/PROVENANCE.json) exists only so conformance tests run offline; it is not a fork or a normative schema source.
 
-- Normative design: [docs/run-contract.md](docs/run-contract.md)
-- JSON Schema: [schemas/run-contract-v1.schema.json](schemas/run-contract-v1.schema.json)
-- Example: [examples/run-contract-v1.json](examples/run-contract-v1.json)
-
-The schema is the interchange boundary. Database tables, HTTP payloads, internal Rust types, GitHub adapters, and agent-specific formats may differ internally, but they must preserve its semantics.
+The orchestrator owns lifecycle and state: scheduling, dashboard projections, provider execution, durable evidence, and integration coordination. Provider-specific commands and UI payloads are local implementation details, not replacement contract models.
 
 ## Intended vertical slice
 
@@ -110,4 +106,4 @@ The schema is the interchange boundary. Database tables, HTTP payloads, internal
 
 The orchestrator owns coordination and durable run state. It does not own coding conventions, invent repository checks, decide semantic equivalence itself, or embed the implementation logic of specialist workers.
 
-The contract starts inside this repository. It should be extracted into a separate package or repository only after multiple external consumers require independent compatibility and release management.
+Contract evolution happens in `agent-contracts`; this repository updates its pin deliberately and validates emitted records against that exact revision.

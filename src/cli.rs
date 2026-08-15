@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::{
     adapters::{Provider, RunRequest, adapter},
     config::ProjectConfig,
-    doctor, process,
+    contracts, doctor, process,
     repository::{self, find_repository_root},
 };
 
@@ -127,12 +127,37 @@ pub fn run() -> Result<()> {
             let command = adapter.command(&config, &request)?;
             let run_id = Uuid::new_v4();
             let run_directory = root.join(".agent-loop/runs").join(run_id.to_string());
-            let outcome = process::execute(
+            let mut contract_run = contracts::begin_persisted_run(
+                run_id.to_string(),
+                &config,
+                provider,
+                &root,
+                &prompt,
+                &run_directory,
+            )?;
+            let result = process::execute(
                 adapter.as_ref(),
                 &command,
                 &run_directory,
                 Duration::from_secs(config.agent.max_duration_seconds),
+            );
+            let provider_session_id = result
+                .as_ref()
+                .ok()
+                .and_then(|outcome| outcome.provider_session_id.clone());
+            let cancelled = result
+                .as_ref()
+                .ok()
+                .is_some_and(|outcome| outcome.cancelled);
+            contracts::complete_persisted_run(
+                &mut contract_run,
+                &root,
+                provider_session_id,
+                result.is_ok(),
+                cancelled,
+                &run_directory,
             )?;
+            let outcome = result?;
             println!("Run completed: {}", outcome.run_directory.display());
             if let Some(session_id) = outcome.provider_session_id {
                 println!("Provider session: {session_id}");

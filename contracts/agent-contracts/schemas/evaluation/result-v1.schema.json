@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-contracts:evaluation-result:v1",
+  "title": "Evaluation Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "evaluationId",
+    "evaluator",
+    "baseline",
+    "candidate",
+    "outcome",
+    "summary",
+    "startedAt",
+    "finishedAt",
+    "evidence"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "evaluationId": { "type": "string", "minLength": 1 },
+    "evaluator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["component", "protocol"],
+      "properties": {
+        "component": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "protocol": { "type": "string", "minLength": 1 },
+        "configurationDigest": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9+._-]*:[A-Za-z0-9._~+/=-]+$"
+        }
+      }
+    },
+    "baseline": { "$ref": "#/$defs/identity" },
+    "candidate": { "$ref": "#/$defs/identity" },
+    "outcome": { "enum": ["passed", "failed", "inconclusive", "error"] },
+    "summary": { "type": "string" },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": {
+        "type": ["number", "string", "boolean", "null"]
+      }
+    },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "finishedAt": { "type": "string", "format": "date-time" },
+    "evidence": {
+      "type": "array",
+      "items": { "$ref": "urn:agent-contracts:evidence:v1" }
+    }
+  },
+  "$defs": {
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "identity"],
+      "properties": {
+        "kind": { "enum": ["git-commit", "patch", "evidence-bundle"] },
+        "identity": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

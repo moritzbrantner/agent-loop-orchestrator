@@ -33,6 +33,7 @@ use uuid::Uuid;
 use crate::{
     adapters::{Provider, RunRequest, adapter},
     config::ProjectConfig,
+    contracts,
     process::{self, ProcessEvent},
     repository::{self, RegisteredProject},
 };
@@ -289,10 +290,10 @@ impl AppState {
             text,
             received_at: Utc::now(),
         };
-        if let Ok(mut dashboard) = self.dashboard.lock() {
-            if let Some(run) = dashboard.runs.iter_mut().find(|run| run.id == run_id) {
-                run.output.push(line.clone());
-            }
+        if let Ok(mut dashboard) = self.dashboard.lock()
+            && let Some(run) = dashboard.runs.iter_mut().find(|run| run.id == run_id)
+        {
+            run.output.push(line.clone());
         }
         let _ = self.save();
         self.emit(EventMessage {
@@ -303,12 +304,12 @@ impl AppState {
     }
 
     fn finish_run(&self, run_id: Uuid, status: RunStatus, error: Option<String>) {
-        if let Ok(mut dashboard) = self.dashboard.lock() {
-            if let Some(run) = dashboard.runs.iter_mut().find(|run| run.id == run_id) {
-                run.status = status;
-                run.finished_at = Some(Utc::now());
-                run.error = error;
-            }
+        if let Ok(mut dashboard) = self.dashboard.lock()
+            && let Some(run) = dashboard.runs.iter_mut().find(|run| run.id == run_id)
+        {
+            run.status = status;
+            run.finished_at = Some(Utc::now());
+            run.error = error;
         }
         if let Ok(mut active) = self.active.lock() {
             *active = None;
@@ -530,6 +531,20 @@ fn launch(state: Arc<AppState>, request: StartRunRequest) -> ApiResult<StoredRun
         output: Vec::new(),
         error: None,
     };
+    let run_id = run.id;
+    let project_root = project.repository_root.clone();
+    let run_directory = project_root
+        .join(".agent-loop/runs")
+        .join(run_id.to_string());
+    let mut contract_run = contracts::begin_persisted_run(
+        run_id.to_string(),
+        &config,
+        provider,
+        &project_root,
+        &run.prompt,
+        &run_directory,
+    )
+    .map_err(ApiError::internal)?;
     let cancellation = Arc::new(AtomicBool::new(false));
     let mut active = state
         .active
@@ -556,11 +571,6 @@ fn launch(state: Arc<AppState>, request: StartRunRequest) -> ApiResult<StoredRun
         line: None,
     });
 
-    let run_id = run.id;
-    let run_directory = project
-        .repository_root
-        .join(".agent-loop/runs")
-        .join(run_id.to_string());
     let timeout = Duration::from_secs(config.agent.max_duration_seconds);
     thread::spawn(move || {
         let adapter = adapter(provider);
@@ -587,7 +597,26 @@ fn launch(state: Arc<AppState>, request: StartRunRequest) -> ApiResult<StoredRun
         } else {
             RunStatus::Failed
         };
+        let provider_session_id = result
+            .as_ref()
+            .ok()
+            .and_then(|outcome| outcome.provider_session_id.clone());
         let error = result.err().map(|error| error.to_string());
+        if let Err(error) = contracts::complete_persisted_run(
+            &mut contract_run,
+            &project_root,
+            provider_session_id,
+            status == RunStatus::Completed,
+            status == RunStatus::Cancelled,
+            &run_directory,
+        ) {
+            state.finish_run(
+                run_id,
+                RunStatus::Failed,
+                Some(format!("persist canonical run record: {error}")),
+            );
+            return;
+        }
         state.finish_run(run_id, status, error);
     });
     Ok(run)
