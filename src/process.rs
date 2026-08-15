@@ -4,7 +4,10 @@ use std::{
     io::{BufRead, BufReader, BufWriter, Write},
     path::{Path, PathBuf},
     process::{Command, ExitStatus, Stdio},
-    sync::mpsc::{self, RecvTimeoutError},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, RecvTimeoutError},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -30,7 +33,14 @@ pub struct RunOutcome {
     pub provider_session_id: Option<String>,
     pub exit_code: Option<i32>,
     pub timed_out: bool,
+    pub cancelled: bool,
     pub run_directory: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub enum ProcessEvent {
+    Stdout(String),
+    Stderr(String),
 }
 
 enum OutputLine {
@@ -45,6 +55,17 @@ pub fn execute(
     spec: &CommandSpec,
     run_directory: &Path,
     timeout: Duration,
+) -> Result<RunOutcome> {
+    execute_observed(adapter, spec, run_directory, timeout, None, |_| {})
+}
+
+pub fn execute_observed(
+    adapter: &dyn AgentAdapter,
+    spec: &CommandSpec,
+    run_directory: &Path,
+    timeout: Duration,
+    cancellation: Option<&AtomicBool>,
+    mut observe: impl FnMut(ProcessEvent),
 ) -> Result<RunOutcome> {
     fs::create_dir_all(run_directory)
         .with_context(|| format!("create run directory {}", run_directory.display()))?;
@@ -76,9 +97,17 @@ pub fn execute(
     let mut stdout_closed = false;
     let mut stderr_closed = false;
     let mut timed_out = false;
+    let mut cancelled = false;
     let mut provider_session_id = None;
 
     while !(stdout_closed && stderr_closed) {
+        if cancellation.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            cancelled = true;
+            child
+                .kill()
+                .context("terminate cancelled provider process")?;
+            break;
+        }
         if started.elapsed() >= timeout {
             timed_out = true;
             child
@@ -89,6 +118,7 @@ pub fn execute(
 
         match receiver.recv_timeout(Duration::from_millis(100)) {
             Ok(OutputLine::Stdout(line)) => {
+                observe(ProcessEvent::Stdout(line.clone()));
                 writeln!(raw, "{line}")?;
                 println!("{line}");
                 match serde_json::from_str::<Value>(&line) {
@@ -119,6 +149,7 @@ pub fn execute(
                 }
             }
             Ok(OutputLine::Stderr(line)) => {
+                observe(ProcessEvent::Stderr(line.clone()));
                 writeln!(errors, "{line}")?;
                 eprintln!("{line}");
             }
@@ -142,6 +173,7 @@ pub fn execute(
         provider_session_id,
         exit_code: status.code(),
         timed_out,
+        cancelled,
         run_directory: run_directory.to_owned(),
     };
     fs::write(
@@ -149,7 +181,7 @@ pub fn execute(
         serde_json::to_vec_pretty(&outcome)?,
     )?;
 
-    ensure_success(status, timed_out, run_directory)?;
+    ensure_success(status, timed_out, cancelled, run_directory)?;
     Ok(outcome)
 }
 
@@ -185,7 +217,18 @@ fn spawn_reader(
     });
 }
 
-fn ensure_success(status: ExitStatus, timed_out: bool, run_directory: &Path) -> Result<()> {
+fn ensure_success(
+    status: ExitStatus,
+    timed_out: bool,
+    cancelled: bool,
+    run_directory: &Path,
+) -> Result<()> {
+    if cancelled {
+        bail!(
+            "provider was cancelled; evidence saved in {}",
+            run_directory.display()
+        );
+    }
     if timed_out {
         bail!(
             "provider timed out; evidence saved in {}",

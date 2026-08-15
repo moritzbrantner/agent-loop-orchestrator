@@ -20,16 +20,22 @@ impl AgentAdapter for CodexAdapter {
             .or(provider.reasoning_effort.as_deref());
         validate_codex_effort(effort)?;
 
+        let automatically_approve = matches!(
+            provider.approval_policy,
+            crate::config::CodexApprovalPolicy::Never
+        );
         let mut args = vec![
             "exec".into(),
             "--json".into(),
             "--cd".into(),
             request.repository_root.as_os_str().to_owned(),
-            "--sandbox".into(),
-            provider.sandbox.as_cli_value().into(),
-            "--ask-for-approval".into(),
-            provider.approval_policy.as_cli_value().into(),
         ];
+
+        if automatically_approve {
+            args.push("--approve-for-me".into());
+        } else {
+            args.extend(["--sandbox".into(), provider.sandbox.as_cli_value().into()]);
+        }
 
         if let Some(model) = request.model_override.or(provider.model.as_deref()) {
             args.extend(["--model".into(), model.into()]);
@@ -81,14 +87,9 @@ mod tests {
             .collect();
         assert_eq!(args[0], "exec");
         assert!(args.iter().any(|arg| arg == "--json"));
-        assert!(
-            args.windows(2)
-                .any(|pair| pair == ["--sandbox", "workspace-write"])
-        );
-        assert!(
-            args.windows(2)
-                .any(|pair| pair == ["--ask-for-approval", "never"])
-        );
+        assert!(args.iter().any(|arg| arg == "--approve-for-me"));
+        assert!(!args.iter().any(|arg| arg == "--ask-for-approval"));
+        assert!(!args.iter().any(|arg| arg == "--sandbox"));
         assert!(
             args.iter()
                 .any(|arg| arg == "model_reasoning_effort=\"xhigh\"")

@@ -1,4 +1,4 @@
-use std::{fs, io, path::PathBuf, str::FromStr, time::Duration};
+use std::{fs, io, net::SocketAddr, path::PathBuf, str::FromStr, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
@@ -56,6 +56,12 @@ enum Commands {
         json: bool,
         #[arg(long, default_value = ".")]
         repository: PathBuf,
+    },
+    /// Serve the authenticated React dashboard.
+    Serve {
+        /// LAN address and port to listen on.
+        #[arg(long, default_value = "0.0.0.0:3000")]
+        bind: SocketAddr,
     },
     /// Print shell completion definitions.
     Completions {
@@ -142,6 +148,10 @@ pub fn run() -> Result<()> {
                 .ok()
                 .and_then(|root| ProjectConfig::load(&root).ok());
             doctor::run(config.as_ref(), provider, json)?;
+        }
+        Commands::Serve { bind } => {
+            tokio::runtime::Runtime::new()?
+                .block_on(crate::server::serve(crate::server::ServeOptions { bind }))?;
         }
         Commands::Completions { shell } => {
             generate(

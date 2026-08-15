@@ -1,3 +1,3 @@
 /target/
 .agent-loop/runs/
-
+/web/node_modules/

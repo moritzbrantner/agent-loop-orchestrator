@@ -60,6 +60,29 @@ agent-loop run --provider claude --resume <session-id> --prompt "Run the final c
 
 See [Claude and Codex adapters](docs/providers.md) for command mappings, permission defaults, event normalization, and the authority boundary.
 
+## Run the LAN dashboard
+
+The dashboard is a React application served by the Rust service. It lists projects registered with `agent-loop init`, starts one active run at a time, keeps a single editable pending run, streams output, and preserves run history locally.
+
+Build the frontend once after changing its source:
+
+```bash
+cd web
+bun install
+bun run build
+cd ..
+```
+
+Start the service on the desired LAN interface:
+
+```bash
+cargo run -- serve --bind 0.0.0.0:3000
+```
+
+The command generates and displays a fresh access token in the terminal. Open `http://<your-machine-lan-address>:3000` and enter that token; the browser retains it only for that session. This MVP uses plain HTTP, so run it only on a trusted network. HTTPS can be restored when remote/LAN hardening becomes a priority.
+
+For frontend development, run `bun run dev` from `web/` while the Rust service is running; Vite proxies `/api` requests to it.
+
 ## Shared run contract
 
 Every execution is represented by a versioned, provider-neutral run contract. It binds the work item, baseline, agent identity, allowed authority, attempts, candidate, checks, evaluations, decisions, and publication to one durable record.

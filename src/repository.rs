@@ -21,6 +21,13 @@ struct RegistryProject {
     repository_root: PathBuf,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisteredProject {
+    pub id: String,
+    pub repository_root: PathBuf,
+}
+
 pub fn find_repository_root(start: &Path) -> Result<PathBuf> {
     let output = Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
@@ -76,8 +83,7 @@ fn update_gitignore(repository_root: &Path) -> Result<()> {
 }
 
 fn register(project_id: &str, repository_root: &Path) -> Result<()> {
-    let data_root = dirs::data_local_dir().context("determine user data directory")?;
-    let directory = data_root.join("agent-loop-orchestrator");
+    let directory = data_directory()?;
     let path = directory.join("projects.json");
     fs::create_dir_all(&directory)?;
     let mut registry = if path.exists() {
@@ -94,4 +100,26 @@ fn register(project_id: &str, repository_root: &Path) -> Result<()> {
     );
     fs::write(&path, serde_json::to_vec_pretty(&registry)?)
         .with_context(|| format!("write {}", path.display()))
+}
+
+pub fn list_registered_projects() -> Result<Vec<RegisteredProject>> {
+    let path = data_directory()?.join("projects.json");
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let registry: Registry = serde_json::from_slice(&fs::read(&path)?)
+        .with_context(|| format!("parse {}", path.display()))?;
+    Ok(registry
+        .projects
+        .into_iter()
+        .map(|(id, project)| RegisteredProject {
+            id,
+            repository_root: project.repository_root,
+        })
+        .collect())
+}
+
+pub fn data_directory() -> Result<PathBuf> {
+    let data_root = dirs::data_local_dir().context("determine user data directory")?;
+    Ok(data_root.join("agent-loop-orchestrator"))
 }
