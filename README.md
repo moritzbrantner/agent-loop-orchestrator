@@ -6,12 +6,16 @@ The orchestrator is the local system of record that connects the rest of the cod
 
 | Component | Responsibility |
 | --- | --- |
+| `agent-contracts` | Neutral, versioned interchange contracts shared across repositories |
 | `coding-agent-conventions` | Policy, principles, convention profiles, and stable convention IDs |
 | `coding-tooling` | Deterministic repository discovery, affected-scope analysis, and checks |
+| `runtime-profiler` | Reproducible runtime evidence capture and immutable evidence bundles |
 | `agent-loop-setup` | Reusable worker procedures and environment-specific installation composition |
-| `agent-loop-orchestrator` | Repository bootstrap, execution adapters, tasks, scheduling, run state, authority, evidence, decisions, and integration |
+| `agent-loop-orchestrator` | Repository bootstrap, execution adapters, tasks, scheduling, run state, authority, evidence references, decisions, and integration |
 | `moonlight` | Baseline/candidate comparison and evaluation |
 | `local-refactor` | A specialized refactoring worker |
+
+The orchestrator should know **that** evidence and evaluations exist, but should not need to understand profiler metrics, Moonlight comparison internals, or repository-specific check formats. Those boundaries are represented by `agent-contracts`.
 
 ## Install once
 
@@ -83,15 +87,26 @@ The command generates and displays a fresh access token in the terminal. Open `h
 
 For frontend development, run `bun run dev` from `web/` while the Rust service is running; Vite proxies `/api` requests to it.
 
-## Shared run contract
+## Shared contracts
 
-Every execution is represented by a versioned, provider-neutral run contract. It binds the work item, baseline, agent identity, allowed authority, attempts, candidate, checks, evaluations, decisions, and publication to one durable record.
+Cross-repository interchange is owned by `agent-contracts`. In particular, the orchestrator should converge on:
 
-- Normative design: [docs/run-contract.md](docs/run-contract.md)
-- JSON Schema: [schemas/run-contract-v1.schema.json](schemas/run-contract-v1.schema.json)
-- Example: [examples/run-contract-v1.json](examples/run-contract-v1.json)
+- `agent.run/v1` for the durable aggregate;
+- `agent.authority/v1` for enforceable worker authority;
+- `agent.task-packet/v1` for bounded delegation;
+- `agent.candidate/v1` for immutable candidate identity;
+- `agent.evidence/v1` for references to runtime, check, trace, or other evidence artifacts;
+- `agent.check-result/v1` for deterministic validation outcomes;
+- `agent.evaluation-result/v1` for evaluator outcomes such as Moonlight results;
+- `agent.component-lock/v1` for the exact compatible component set used by a run.
 
-The schema is the interchange boundary. Database tables, HTTP payloads, internal Rust types, GitHub adapters, and agent-specific formats may differ internally, but they must preserve its semantics.
+This repository currently still contains an older local run-contract schema and examples:
+
+- [docs/run-contract.md](docs/run-contract.md)
+- [schemas/run-contract-v1.schema.json](schemas/run-contract-v1.schema.json)
+- [examples/run-contract-v1.json](examples/run-contract-v1.json)
+
+Treat those files as a transitional compatibility mirror, not as the source of truth for new cross-repository integrations. New integrations must target the corresponding `agent-contracts` identities, and the local mirror should be retired as the implementation migrates.
 
 ## Intended vertical slice
 
@@ -101,13 +116,16 @@ The schema is the interchange boundary. Database tables, HTTP payloads, internal
 4. Start one worker with explicit authority.
 5. Discover and run deterministic capabilities through `coding-tooling`.
 6. Record the resulting commit or patch as a candidate.
-7. Evaluate baseline against candidate through Moonlight.
-8. Store immutable evidence.
-9. Request a human or policy decision.
-10. Integrate locally or explicitly publish through an adapter.
+7. Capture additional evidence such as runtime measurements through a producer like `runtime-profiler` when required by policy.
+8. Evaluate baseline against candidate through Moonlight or another evaluator.
+9. Store neutral evidence references and evaluation results in the durable run.
+10. Request a human or policy decision.
+11. Integrate locally or explicitly publish through an adapter.
+
+The orchestrator decides **when** collectors and evaluators run. It does not decide how runtime measurements are normalized or how Moonlight classifies differences.
 
 ## Boundary
 
-The orchestrator owns coordination and durable run state. It does not own coding conventions, invent repository checks, decide semantic equivalence itself, or embed the implementation logic of specialist workers.
+The orchestrator owns coordination and durable run state. It does not own coding conventions, invent repository checks, capture profiler-specific measurements, decide semantic equivalence itself, or embed the implementation logic of specialist workers.
 
-The contract starts inside this repository. It should be extracted into a separate package or repository only after multiple external consumers require independent compatibility and release management.
+Shared cross-repository semantics belong in `agent-contracts`. Provider adapters, database tables, HTTP payloads, and internal Rust types may remain orchestrator-specific as long as they preserve those contract semantics at the repository boundary.
