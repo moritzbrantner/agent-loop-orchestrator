@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-contracts:check-result:v1",
+  "title": "Deterministic Check Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "checkId",
+    "capability",
+    "candidate",
+    "outcome",
+    "required",
+    "startedAt",
+    "finishedAt",
+    "evidence"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "checkId": { "type": "string", "minLength": 1 },
+    "capability": { "type": "string", "minLength": 1 },
+    "component": { "type": "string", "minLength": 1 },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "identity"],
+      "properties": {
+        "kind": { "enum": ["git-commit", "patch"] },
+        "identity": { "type": "string", "minLength": 1 }
+      }
+    },
+    "outcome": { "enum": ["passed", "failed", "unavailable", "skipped", "error"] },
+    "required": { "type": "boolean" },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "finishedAt": { "type": "string", "format": "date-time" },
+    "durationMs": { "type": "integer", "minimum": 0 },
+    "exitCode": { "type": ["integer", "null"] },
+    "reason": { "type": "string" },
+    "evidence": {
+      "type": "array",
+      "items": { "$ref": "urn:agent-contracts:evidence:v1" }
+    }
+  }
+}

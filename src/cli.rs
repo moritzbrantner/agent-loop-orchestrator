@@ -1,4 +1,4 @@
-use std::{fs, io, net::SocketAddr, path::PathBuf, str::FromStr, time::Duration};
+use std::{fs, io, net::SocketAddr, path::PathBuf, str::FromStr};
 
 use anyhow::{Context, Result, bail};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
@@ -6,10 +6,11 @@ use clap_complete::{Shell, generate};
 use uuid::Uuid;
 
 use crate::{
-    adapters::{Provider, RunRequest, adapter},
+    adapters::Provider,
     config::ProjectConfig,
-    doctor, process,
-    repository::{self, find_repository_root},
+    doctor,
+    execution::{CreateWorkItem, DecisionRequest, ExecutionOverrides, ExecutionService},
+    repository::{self, RegisteredProject, find_repository_root},
 };
 
 #[derive(Debug, Parser)]
@@ -30,7 +31,7 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
-    /// Run one provider turn and persist its event stream as local evidence.
+    /// Create and start a whole-repository work item, stopping for a decision.
     Run {
         #[arg(long, default_value = ".")]
         repository: PathBuf,
@@ -44,9 +45,34 @@ enum Commands {
         model: Option<String>,
         #[arg(long)]
         effort: Option<String>,
-        /// Continue an existing provider session by its provider-native ID or name.
+        /// Continue an existing provider session inside a fresh isolated attempt.
         #[arg(long)]
         resume: Option<String>,
+    },
+    /// Create and inspect durable local work items.
+    WorkItem {
+        #[command(subcommand)]
+        command: WorkItemCommands,
+    },
+    /// Start one open work item through its configured provider.
+    Start {
+        work_item_id: Uuid,
+        #[arg(long)]
+        provider: Option<String>,
+    },
+    /// Show a work item or run from durable local state.
+    Show { id: Uuid },
+    /// Approve and locally integrate an exact checked candidate.
+    Approve {
+        run_id: Uuid,
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Reject a candidate without integrating it.
+    Reject {
+        run_id: Uuid,
+        #[arg(long)]
+        reason: Option<String>,
     },
     /// Check provider installations and authentication without starting an agent.
     Doctor {
@@ -68,6 +94,29 @@ enum Commands {
         #[arg(value_enum)]
         shell: CompletionShell,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum WorkItemCommands {
+    /// Create a work item and bind it to the selected baseline commit.
+    Create {
+        #[arg(long, default_value = ".")]
+        repository: PathBuf,
+        #[arg(long)]
+        title: String,
+        #[arg(long, conflicts_with = "prompt_file")]
+        prompt: Option<String>,
+        #[arg(long, value_name = "FILE", conflicts_with = "prompt")]
+        prompt_file: Option<PathBuf>,
+        #[arg(long = "scope", default_value = ".")]
+        declared_scope: Vec<String>,
+        #[arg(long)]
+        baseline: Option<String>,
+        #[arg(long)]
+        target_branch: Option<String>,
+    },
+    /// List durable local work items.
+    List,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -116,27 +165,117 @@ pub fn run() -> Result<()> {
                 .transpose()?
                 .unwrap_or(config.agent.provider);
             let prompt = read_prompt(prompt, prompt_file)?;
-            let adapter = adapter(provider);
-            let request = RunRequest {
-                repository_root: &root,
-                prompt: &prompt,
-                resume_session: resume.as_deref(),
-                model_override: model.as_deref(),
-                effort_override: effort.as_deref(),
-            };
-            let command = adapter.command(&config, &request)?;
-            let run_id = Uuid::new_v4();
-            let run_directory = root.join(".agent-loop/runs").join(run_id.to_string());
-            let outcome = process::execute(
-                adapter.as_ref(),
-                &command,
-                &run_directory,
-                Duration::from_secs(config.agent.max_duration_seconds),
+            let project = registered_project_for_root(&root, &config)?;
+            let mut service = execution_service()?;
+            let work_item = service.create_work_item(CreateWorkItem {
+                project,
+                title: prompt.lines().next().unwrap_or("Local work item").into(),
+                prompt,
+                declared_scope: vec![".".into()],
+                baseline_ref: config.execution.target_branch.clone(),
+                target_branch: config.execution.target_branch,
+            })?;
+            let run = service.run_work_item_with_overrides(
+                &work_item.id,
+                provider,
+                ExecutionOverrides {
+                    model,
+                    effort,
+                    resume_session: resume,
+                },
+                None,
+                |_| {},
             )?;
-            println!("Run completed: {}", outcome.run_directory.display());
-            if let Some(session_id) = outcome.provider_session_id {
-                println!("Provider session: {session_id}");
+            println!("Work item: {}", work_item.id);
+            println!("Run: {} ({:?})", run.id, run.status);
+            if run.status == crate::execution::LocalRunStatus::AwaitingDecision {
+                println!("Next: agent-loop approve {}", run.id);
             }
+        }
+        Commands::WorkItem { command } => match command {
+            WorkItemCommands::Create {
+                repository,
+                title,
+                prompt,
+                prompt_file,
+                declared_scope,
+                baseline,
+                target_branch,
+            } => {
+                let root = find_repository_root(&repository)?;
+                let config = ProjectConfig::load(&root)?;
+                let project = registered_project_for_root(&root, &config)?;
+                let target_branch = target_branch.unwrap_or(config.execution.target_branch);
+                let baseline_ref = baseline.unwrap_or_else(|| target_branch.clone());
+                let mut service = execution_service()?;
+                let work_item = service.create_work_item(CreateWorkItem {
+                    project,
+                    title,
+                    prompt: read_prompt(prompt, prompt_file)?,
+                    declared_scope,
+                    baseline_ref,
+                    target_branch,
+                })?;
+                println!("{}", serde_json::to_string_pretty(&work_item)?);
+            }
+            WorkItemCommands::List => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&execution_service()?.snapshot().work_items)?
+                );
+            }
+        },
+        Commands::Start {
+            work_item_id,
+            provider,
+        } => {
+            let mut service = execution_service()?;
+            let item = service
+                .snapshot()
+                .work_items
+                .into_iter()
+                .find(|item| item.id == work_item_id)
+                .with_context(|| format!("work item {work_item_id} was not found"))?;
+            let config = ProjectConfig::load(&item.repository_root)?;
+            let provider = provider
+                .as_deref()
+                .map(Provider::from_str)
+                .transpose()?
+                .unwrap_or(config.agent.provider);
+            let run = service.run_work_item(&work_item_id, provider, None, |_| {})?;
+            println!("{}", serde_json::to_string_pretty(&run)?);
+        }
+        Commands::Show { id } => {
+            let snapshot = execution_service()?.snapshot();
+            if let Some(run) = snapshot.runs.iter().find(|run| run.id == id) {
+                println!("{}", serde_json::to_string_pretty(run)?);
+            } else if let Some(item) = snapshot.work_items.iter().find(|item| item.id == id) {
+                println!("{}", serde_json::to_string_pretty(item)?);
+            } else {
+                bail!("no work item or run {id} was found");
+            }
+        }
+        Commands::Approve { run_id, reason } => {
+            let mut service = execution_service()?;
+            let run = service.decide(
+                run_id,
+                DecisionRequest::Approve {
+                    actor: "local-cli".into(),
+                    reason,
+                },
+            )?;
+            println!("{}", serde_json::to_string_pretty(&run)?);
+        }
+        Commands::Reject { run_id, reason } => {
+            let mut service = execution_service()?;
+            let run = service.decide(
+                run_id,
+                DecisionRequest::Reject {
+                    actor: "local-cli".into(),
+                    reason,
+                },
+            )?;
+            println!("{}", serde_json::to_string_pretty(&run)?);
         }
         Commands::Doctor {
             provider,
@@ -163,6 +302,26 @@ pub fn run() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn execution_service() -> Result<ExecutionService> {
+    ExecutionService::load(repository::data_directory()?)
+}
+
+fn registered_project_for_root(
+    root: &std::path::Path,
+    config: &ProjectConfig,
+) -> Result<RegisteredProject> {
+    repository::list_registered_projects()?
+        .into_iter()
+        .find(|project| project.id == config.project.id && project.repository_root == root)
+        .with_context(|| {
+            format!(
+                "{} is not the registered root for project `{}`; run `agent-loop init` first",
+                root.display(),
+                config.project.id
+            )
+        })
 }
 
 fn read_prompt(prompt: Option<String>, prompt_file: Option<PathBuf>) -> Result<String> {

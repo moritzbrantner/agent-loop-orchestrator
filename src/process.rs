@@ -14,7 +14,6 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
-use serde::Serialize;
 use serde_json::Value;
 
 use crate::adapters::{AgentAdapter, Provider};
@@ -26,8 +25,7 @@ pub struct CommandSpec {
     pub current_dir: PathBuf,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug)]
 pub struct RunOutcome {
     pub provider: Provider,
     pub provider_session_id: Option<String>,
@@ -176,11 +174,6 @@ pub fn execute_observed(
         cancelled,
         run_directory: run_directory.to_owned(),
     };
-    fs::write(
-        run_directory.join("outcome.json"),
-        serde_json::to_vec_pretty(&outcome)?,
-    )?;
-
     ensure_success(status, timed_out, cancelled, run_directory)?;
     Ok(outcome)
 }

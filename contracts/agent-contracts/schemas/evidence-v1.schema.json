@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-contracts:evidence:v1",
+  "title": "Evidence Reference v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "kind", "uri", "digest", "createdAt"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "kind": { "type": "string", "minLength": 1 },
+    "uri": { "type": "string", "minLength": 1 },
+    "digest": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9+._-]*:[A-Za-z0-9._~+/=-]+$"
+    },
+    "mediaType": { "type": "string", "minLength": 1 },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "sizeBytes": { "type": "integer", "minimum": 0 }
+  }
+}

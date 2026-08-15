@@ -1,6 +1,5 @@
 use std::{
     convert::Infallible,
-    fs,
     net::SocketAddr,
     path::PathBuf,
     sync::{
@@ -8,7 +7,6 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread,
-    time::Duration,
 };
 
 use anyhow::{Context, Result};
@@ -20,9 +18,8 @@ use axum::{
         IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
     },
-    routing::{get, post, put},
+    routing::{get, post},
 };
-use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
@@ -31,80 +28,17 @@ use tower_http::services::ServeDir;
 use uuid::Uuid;
 
 use crate::{
-    adapters::{Provider, RunRequest, adapter},
+    adapters::Provider,
     config::ProjectConfig,
-    process::{self, ProcessEvent},
+    execution::{
+        CreateWorkItem, DecisionRequest, ExecutionOutputLine, ExecutionService, LocalRun, WorkItem,
+    },
     repository::{self, RegisteredProject},
 };
-
-const STATE_FILE: &str = "dashboard-state.json";
 
 #[derive(Debug, Clone)]
 pub struct ServeOptions {
     pub bind: SocketAddr,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum RunStatus {
-    Running,
-    Completed,
-    Failed,
-    Cancelled,
-    Interrupted,
-}
-
-impl RunStatus {
-    fn is_active(&self) -> bool {
-        matches!(self, Self::Running)
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OutputLine {
-    pub source: OutputSource,
-    pub text: String,
-    pub received_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum OutputSource {
-    Stdout,
-    Stderr,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct StoredRun {
-    pub id: Uuid,
-    pub project_id: String,
-    pub provider: Provider,
-    pub prompt: String,
-    pub status: RunStatus,
-    pub started_at: DateTime<Utc>,
-    pub finished_at: Option<DateTime<Utc>>,
-    pub output: Vec<OutputLine>,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PendingRun {
-    pub project_id: String,
-    pub provider: Option<Provider>,
-    pub prompt: String,
-    pub saved_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct PersistedDashboard {
-    #[serde(default)]
-    runs: Vec<StoredRun>,
-    #[serde(default)]
-    pending: Option<PendingRun>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -113,50 +47,73 @@ struct ProjectView {
     id: String,
     path: PathBuf,
     default_provider: Provider,
+    target_branch: String,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DashboardResponse {
     projects: Vec<ProjectView>,
-    runs: Vec<StoredRun>,
-    pending: Option<PendingRun>,
+    work_items: Vec<WorkItem>,
+    runs: Vec<LocalRun>,
     active_run_id: Option<Uuid>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct StartRunRequest {
+struct CreateWorkItemRequest {
     project_id: String,
-    provider: Option<Provider>,
+    title: String,
     prompt: String,
+    #[serde(default = "default_scope")]
+    declared_scope: Vec<String>,
+    baseline_ref: Option<String>,
+    target_branch: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StartWorkItemRequest {
+    provider: Option<Provider>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct StartRunResponse {
+struct StartWorkItemResponse {
     disposition: &'static str,
-    run: Option<StoredRun>,
-    pending: Option<PendingRun>,
+    work_item_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DecisionBody {
+    decision: LocalDecision,
+    reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum LocalDecision {
+    Approve,
+    Reject,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct EventMessage<'a> {
-    kind: &'a str,
-    run_id: Uuid,
-    line: Option<&'a OutputLine>,
+struct EventMessage {
+    kind: &'static str,
+    run_id: Option<Uuid>,
+    line: Option<ExecutionOutputLine>,
 }
 
 struct ActiveRun {
-    id: Uuid,
+    work_item_id: Uuid,
     cancellation: Arc<AtomicBool>,
 }
 
 struct AppState {
     token: String,
-    state_path: PathBuf,
-    dashboard: Mutex<PersistedDashboard>,
+    data_root: PathBuf,
     active: Mutex<Option<ActiveRun>>,
     events: broadcast::Sender<String>,
 }
@@ -218,12 +175,20 @@ type ApiResult<T> = std::result::Result<T, ApiError>;
 
 pub async fn serve(options: ServeOptions) -> Result<()> {
     let token = Uuid::new_v4().to_string();
-    let state = Arc::new(AppState::load(token.clone())?);
+    let data_root = repository::data_directory()?;
+    ExecutionService::load(&data_root)?.recover_interrupted_runs()?;
+    let (event_sender, _) = broadcast::channel(256);
+    let state = Arc::new(AppState {
+        token: token.clone(),
+        data_root,
+        active: Mutex::new(None),
+        events: event_sender,
+    });
     let app = Router::new()
         .route("/api/dashboard", get(dashboard))
-        .route("/api/runs", post(start_run))
-        .route("/api/pending", put(update_pending).delete(delete_pending))
-        .route("/api/pending/start", post(start_pending_run))
+        .route("/api/work-items", post(create_work_item))
+        .route("/api/work-items/{id}/start", post(start_work_item))
+        .route("/api/runs/{id}/decision", post(decide_run))
         .route("/api/runs/{id}/cancel", post(cancel_run))
         .route("/api/events", get(events))
         .fallback_service(ServeDir::new("web/dist").append_index_html_on_directories(true))
@@ -237,225 +202,170 @@ pub async fn serve(options: ServeOptions) -> Result<()> {
     axum::serve(listener, app).await.context("serve dashboard")
 }
 
-impl AppState {
-    fn load(token: String) -> Result<Self> {
-        let directory = repository::data_directory()?;
-        fs::create_dir_all(&directory)?;
-        let state_path = directory.join(STATE_FILE);
-        let mut dashboard = if state_path.exists() {
-            serde_json::from_slice(&fs::read(&state_path)?)
-                .with_context(|| format!("parse {}", state_path.display()))?
-        } else {
-            PersistedDashboard::default()
-        };
-        for run in &mut dashboard.runs {
-            if run.status.is_active() {
-                run.status = RunStatus::Interrupted;
-                run.finished_at = Some(Utc::now());
-                run.error =
-                    Some("the dashboard service restarted while this run was active".into());
-            }
-        }
-        let (events, _) = broadcast::channel(256);
-        let state = Self {
-            token,
-            state_path,
-            dashboard: Mutex::new(dashboard),
-            active: Mutex::new(None),
-            events,
-        };
-        state.save()?;
-        Ok(state)
-    }
-
-    fn save(&self) -> Result<()> {
-        let dashboard = self
-            .dashboard
-            .lock()
-            .map_err(|_| anyhow::anyhow!("dashboard state lock poisoned"))?;
-        fs::write(&self.state_path, serde_json::to_vec_pretty(&*dashboard)?)
-            .with_context(|| format!("write {}", self.state_path.display()))
-    }
-
-    fn emit(&self, event: impl Serialize) {
-        if let Ok(event) = serde_json::to_string(&event) {
-            let _ = self.events.send(event);
-        }
-    }
-
-    fn append_output(&self, run_id: Uuid, source: OutputSource, text: String) {
-        let line = OutputLine {
-            source,
-            text,
-            received_at: Utc::now(),
-        };
-        if let Ok(mut dashboard) = self.dashboard.lock() {
-            if let Some(run) = dashboard.runs.iter_mut().find(|run| run.id == run_id) {
-                run.output.push(line.clone());
-            }
-        }
-        let _ = self.save();
-        self.emit(EventMessage {
-            kind: "output",
-            run_id,
-            line: Some(&line),
-        });
-    }
-
-    fn finish_run(&self, run_id: Uuid, status: RunStatus, error: Option<String>) {
-        if let Ok(mut dashboard) = self.dashboard.lock() {
-            if let Some(run) = dashboard.runs.iter_mut().find(|run| run.id == run_id) {
-                run.status = status;
-                run.finished_at = Some(Utc::now());
-                run.error = error;
-            }
-        }
-        if let Ok(mut active) = self.active.lock() {
-            *active = None;
-        }
-        let _ = self.save();
-        self.emit(EventMessage {
-            kind: "state",
-            run_id,
-            line: None,
-        });
-    }
-}
-
-fn authorize(headers: &HeaderMap, state: &AppState) -> ApiResult<()> {
-    let provided = headers
-        .get("authorization")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "));
-    if provided == Some(state.token.as_str()) {
-        Ok(())
-    } else {
-        Err(ApiError::unauthorized())
-    }
-}
-
 async fn dashboard(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> ApiResult<Json<DashboardResponse>> {
     authorize(&headers, &state)?;
-    let dashboard = state
-        .dashboard
+    let snapshot = service(&state)?.snapshot();
+    let active_work_item_id = state
+        .active
         .lock()
-        .map_err(|_| ApiError::internal(anyhow::anyhow!("dashboard state lock poisoned")))?
-        .clone();
-    let active_run_id = dashboard
-        .runs
-        .iter()
-        .find(|run| run.status.is_active())
-        .map(|run| run.id);
+        .map_err(|_| ApiError::internal(anyhow::anyhow!("active execution lock poisoned")))?
+        .as_ref()
+        .map(|active| active.work_item_id);
+    let in_memory_run_id = active_work_item_id.and_then(|work_item_id| {
+        snapshot
+            .work_items
+            .iter()
+            .find(|item| item.id == work_item_id)
+            .and_then(|item| item.run_id)
+    });
+    let active_run_id = in_memory_run_id.or_else(|| {
+        snapshot
+            .runs
+            .iter()
+            .rev()
+            .find(|run| run.status.blocks_new_run())
+            .map(|run| run.id)
+    });
     Ok(Json(DashboardResponse {
         projects: project_views().map_err(ApiError::internal)?,
-        runs: dashboard.runs.into_iter().rev().collect(),
-        pending: dashboard.pending,
+        work_items: snapshot.work_items.into_iter().rev().collect(),
+        runs: snapshot.runs.into_iter().rev().collect(),
         active_run_id,
     }))
 }
 
-async fn start_run(
+async fn create_work_item(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Json(request): Json<StartRunRequest>,
-) -> ApiResult<Json<StartRunResponse>> {
+    Json(request): Json<CreateWorkItemRequest>,
+) -> ApiResult<Json<WorkItem>> {
     authorize(&headers, &state)?;
-    validate_start_request(&request)?;
-    if state
-        .active
-        .lock()
-        .map_err(|_| ApiError::internal(anyhow::anyhow!("active run lock poisoned")))?
-        .is_some()
-    {
-        let pending = save_pending_request(&state, request)?;
-        return Ok(Json(StartRunResponse {
-            disposition: "saved",
-            run: None,
-            pending: Some(pending),
-        }));
+    if request.project_id.trim().is_empty() {
+        return Err(ApiError::bad_request("select a registered project"));
     }
-    match launch(Arc::clone(&state), request.clone()) {
-        Ok(run) => Ok(Json(StartRunResponse {
-            disposition: "started",
-            run: Some(run),
-            pending: None,
-        })),
-        Err(error) if error.status == StatusCode::CONFLICT => {
-            let pending = save_pending_request(&state, request)?;
-            Ok(Json(StartRunResponse {
-                disposition: "saved",
-                run: None,
-                pending: Some(pending),
-            }))
+    if request.title.trim().is_empty() || request.prompt.trim().is_empty() {
+        return Err(ApiError::bad_request("title and prompt cannot be empty"));
+    }
+    let project = registered_project(&request.project_id)?;
+    let config = ProjectConfig::load(&project.repository_root).map_err(ApiError::internal)?;
+    let target_branch = request
+        .target_branch
+        .unwrap_or(config.execution.target_branch);
+    let baseline_ref = request
+        .baseline_ref
+        .unwrap_or_else(|| target_branch.clone());
+    let item = service(&state)?
+        .create_work_item(CreateWorkItem {
+            project,
+            title: request.title,
+            prompt: request.prompt,
+            declared_scope: request.declared_scope,
+            baseline_ref,
+            target_branch,
+        })
+        .map_err(ApiError::internal)?;
+    state.emit(EventMessage {
+        kind: "state",
+        run_id: None,
+        line: None,
+    });
+    Ok(Json(item))
+}
+
+async fn start_work_item(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(work_item_id): Path<Uuid>,
+    Json(request): Json<StartWorkItemRequest>,
+) -> ApiResult<(StatusCode, Json<StartWorkItemResponse>)> {
+    authorize(&headers, &state)?;
+    let snapshot = service(&state)?.snapshot();
+    if snapshot.runs.iter().any(|run| run.status.blocks_new_run()) {
+        return Err(ApiError::conflict("another local run is active"));
+    }
+    let work_item = snapshot
+        .work_items
+        .into_iter()
+        .find(|item| item.id == work_item_id)
+        .ok_or_else(|| ApiError::not_found(format!("work item {work_item_id} was not found")))?;
+    let config = ProjectConfig::load(&work_item.repository_root).map_err(ApiError::internal)?;
+    let provider = request.provider.unwrap_or(config.agent.provider);
+    let cancellation = Arc::new(AtomicBool::new(false));
+    {
+        let mut active = state
+            .active
+            .lock()
+            .map_err(|_| ApiError::internal(anyhow::anyhow!("active execution lock poisoned")))?;
+        if active.is_some() {
+            return Err(ApiError::conflict("another local run is active"));
         }
-        Err(error) => Err(error),
+        *active = Some(ActiveRun {
+            work_item_id,
+            cancellation: Arc::clone(&cancellation),
+        });
     }
+    let worker_state = Arc::clone(&state);
+    thread::spawn(move || {
+        let result = ExecutionService::load(&worker_state.data_root).and_then(|mut service| {
+            service.run_work_item(&work_item_id, provider, Some(&cancellation), |event| {
+                let run_id = run_id_for_work_item(&worker_state.data_root, work_item_id);
+                let line = event.into();
+                worker_state.emit(EventMessage {
+                    kind: "output",
+                    run_id,
+                    line: Some(line),
+                });
+            })
+        });
+        if let Err(error) = result {
+            eprintln!("run work item {work_item_id}: {error}");
+        }
+        if let Ok(mut active) = worker_state.active.lock() {
+            *active = None;
+        }
+        worker_state.emit(EventMessage {
+            kind: "state",
+            run_id: run_id_for_work_item(&worker_state.data_root, work_item_id),
+            line: None,
+        });
+    });
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(StartWorkItemResponse {
+            disposition: "started",
+            work_item_id,
+        }),
+    ))
 }
 
-async fn update_pending(
+async fn decide_run(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Json(request): Json<StartRunRequest>,
-) -> ApiResult<Json<PendingRun>> {
+    Path(run_id): Path<Uuid>,
+    Json(body): Json<DecisionBody>,
+) -> ApiResult<Json<LocalRun>> {
     authorize(&headers, &state)?;
-    validate_start_request(&request)?;
-    let pending = save_pending_request(&state, request)?;
-    Ok(Json(pending))
-}
-
-async fn delete_pending(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> ApiResult<StatusCode> {
-    authorize(&headers, &state)?;
-    state
-        .dashboard
-        .lock()
-        .map_err(|_| ApiError::internal(anyhow::anyhow!("dashboard state lock poisoned")))?
-        .pending = None;
-    state.save().map_err(ApiError::internal)?;
-    state.emit(serde_json::json!({ "kind": "state" }));
-    Ok(StatusCode::NO_CONTENT)
-}
-
-async fn start_pending_run(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> ApiResult<Json<StoredRun>> {
-    authorize(&headers, &state)?;
-    if state
-        .active
-        .lock()
-        .map_err(|_| ApiError::internal(anyhow::anyhow!("active run lock poisoned")))?
-        .is_some()
-    {
-        return Err(ApiError::conflict(
-            "an active run must finish before the pending run can start",
-        ));
-    }
-    let pending = state
-        .dashboard
-        .lock()
-        .map_err(|_| ApiError::internal(anyhow::anyhow!("dashboard state lock poisoned")))?
-        .pending
-        .clone()
-        .ok_or_else(|| ApiError::not_found("there is no pending run"))?;
-    let request = StartRunRequest {
-        project_id: pending.project_id,
-        provider: pending.provider,
-        prompt: pending.prompt,
+    let decision = match body.decision {
+        LocalDecision::Approve => DecisionRequest::Approve {
+            actor: "local-dashboard".into(),
+            reason: body.reason,
+        },
+        LocalDecision::Reject => DecisionRequest::Reject {
+            actor: "local-dashboard".into(),
+            reason: body.reason,
+        },
     };
-    let run = launch(Arc::clone(&state), request)?;
-    state
-        .dashboard
-        .lock()
-        .map_err(|_| ApiError::internal(anyhow::anyhow!("dashboard state lock poisoned")))?
-        .pending = None;
-    state.save().map_err(ApiError::internal)?;
-    state.emit(serde_json::json!({ "kind": "state" }));
+    let run = service(&state)?
+        .decide(run_id, decision)
+        .map_err(|error| ApiError::conflict(error.to_string()))?;
+    state.emit(EventMessage {
+        kind: "state",
+        run_id: Some(run_id),
+        line: None,
+    });
     Ok(Json(run))
 }
 
@@ -468,11 +378,12 @@ async fn cancel_run(
     let active = state
         .active
         .lock()
-        .map_err(|_| ApiError::internal(anyhow::anyhow!("active run lock poisoned")))?;
+        .map_err(|_| ApiError::internal(anyhow::anyhow!("active execution lock poisoned")))?;
     let active = active
         .as_ref()
         .ok_or_else(|| ApiError::conflict("there is no active run"))?;
-    if active.id != run_id {
+    let active_run_id = run_id_for_work_item(&state.data_root, active.work_item_id);
+    if active_run_id != Some(run_id) {
         return Err(ApiError::conflict("only the active run can be cancelled"));
     }
     active.cancellation.store(true, Ordering::Relaxed);
@@ -492,105 +403,38 @@ async fn events(
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
-fn validate_start_request(request: &StartRunRequest) -> ApiResult<()> {
-    if request.project_id.trim().is_empty() {
-        return Err(ApiError::bad_request("select a registered project"));
+impl AppState {
+    fn emit(&self, event: impl Serialize) {
+        if let Ok(event) = serde_json::to_string(&event) {
+            let _ = self.events.send(event);
+        }
     }
-    if request.prompt.trim().is_empty() {
-        return Err(ApiError::bad_request("prompt cannot be empty"));
-    }
-    Ok(())
 }
 
-fn launch(state: Arc<AppState>, request: StartRunRequest) -> ApiResult<StoredRun> {
-    let project = registered_project(&request.project_id)?;
-    let config = ProjectConfig::load(&project.repository_root).map_err(ApiError::internal)?;
-    let provider = request.provider.unwrap_or(config.agent.provider);
-    let command_adapter = adapter(provider);
-    let command = command_adapter
-        .command(
-            &config,
-            &RunRequest {
-                repository_root: &project.repository_root,
-                prompt: &request.prompt,
-                resume_session: None,
-                model_override: None,
-                effort_override: None,
-            },
-        )
-        .map_err(ApiError::internal)?;
-    let run = StoredRun {
-        id: Uuid::new_v4(),
-        project_id: project.id,
-        provider,
-        prompt: request.prompt,
-        status: RunStatus::Running,
-        started_at: Utc::now(),
-        finished_at: None,
-        output: Vec::new(),
-        error: None,
-    };
-    let cancellation = Arc::new(AtomicBool::new(false));
-    let mut active = state
-        .active
-        .lock()
-        .map_err(|_| ApiError::internal(anyhow::anyhow!("active run lock poisoned")))?;
-    if active.is_some() {
-        return Err(ApiError::conflict("another run became active"));
+fn authorize(headers: &HeaderMap, state: &AppState) -> ApiResult<()> {
+    let provided = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "));
+    if provided == Some(state.token.as_str()) {
+        Ok(())
+    } else {
+        Err(ApiError::unauthorized())
     }
-    *active = Some(ActiveRun {
-        id: run.id,
-        cancellation: Arc::clone(&cancellation),
-    });
-    drop(active);
-    state
-        .dashboard
-        .lock()
-        .map_err(|_| ApiError::internal(anyhow::anyhow!("dashboard state lock poisoned")))?
-        .runs
-        .push(run.clone());
-    state.save().map_err(ApiError::internal)?;
-    state.emit(EventMessage {
-        kind: "state",
-        run_id: run.id,
-        line: None,
-    });
+}
 
-    let run_id = run.id;
-    let run_directory = project
-        .repository_root
-        .join(".agent-loop/runs")
-        .join(run_id.to_string());
-    let timeout = Duration::from_secs(config.agent.max_duration_seconds);
-    thread::spawn(move || {
-        let adapter = adapter(provider);
-        let worker_state = Arc::clone(&state);
-        let result = process::execute_observed(
-            adapter.as_ref(),
-            &command,
-            &run_directory,
-            timeout,
-            Some(&cancellation),
-            move |event| match event {
-                ProcessEvent::Stdout(line) => {
-                    worker_state.append_output(run_id, OutputSource::Stdout, line)
-                }
-                ProcessEvent::Stderr(line) => {
-                    worker_state.append_output(run_id, OutputSource::Stderr, line)
-                }
-            },
-        );
-        let status = if cancellation.load(Ordering::Relaxed) {
-            RunStatus::Cancelled
-        } else if result.is_ok() {
-            RunStatus::Completed
-        } else {
-            RunStatus::Failed
-        };
-        let error = result.err().map(|error| error.to_string());
-        state.finish_run(run_id, status, error);
-    });
-    Ok(run)
+fn service(state: &AppState) -> ApiResult<ExecutionService> {
+    ExecutionService::load(&state.data_root).map_err(ApiError::internal)
+}
+
+fn run_id_for_work_item(data_root: &std::path::Path, work_item_id: Uuid) -> Option<Uuid> {
+    ExecutionService::load(data_root)
+        .ok()?
+        .snapshot()
+        .work_items
+        .into_iter()
+        .find(|item| item.id == work_item_id)?
+        .run_id
 }
 
 fn registered_project(project_id: &str) -> ApiResult<RegisteredProject> {
@@ -603,23 +447,6 @@ fn registered_project(project_id: &str) -> ApiResult<RegisteredProject> {
         })
 }
 
-fn save_pending_request(state: &AppState, request: StartRunRequest) -> ApiResult<PendingRun> {
-    let pending = PendingRun {
-        project_id: request.project_id,
-        provider: request.provider,
-        prompt: request.prompt,
-        saved_at: Utc::now(),
-    };
-    state
-        .dashboard
-        .lock()
-        .map_err(|_| ApiError::internal(anyhow::anyhow!("dashboard state lock poisoned")))?
-        .pending = Some(pending.clone());
-    state.save().map_err(ApiError::internal)?;
-    state.emit(serde_json::json!({ "kind": "state" }));
-    Ok(pending)
-}
-
 fn project_views() -> Result<Vec<ProjectView>> {
     repository::list_registered_projects()?
         .into_iter()
@@ -629,7 +456,12 @@ fn project_views() -> Result<Vec<ProjectView>> {
                 id: project.id,
                 path: project.repository_root,
                 default_provider: config.agent.provider,
+                target_branch: config.execution.target_branch,
             })
         })
         .collect()
+}
+
+fn default_scope() -> Vec<String> {
+    vec![".".into()]
 }

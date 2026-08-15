@@ -12,6 +12,26 @@ pub struct ProjectConfig {
     pub project: Project,
     pub agent: AgentDefaults,
     pub providers: Providers,
+    #[serde(default)]
+    pub execution: ExecutionConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionConfig {
+    pub coding_tooling_executable: String,
+    pub check_tier: String,
+    pub target_branch: String,
+}
+
+impl Default for ExecutionConfig {
+    fn default() -> Self {
+        Self {
+            coding_tooling_executable: "coding-tooling".into(),
+            check_tier: "fast".into(),
+            target_branch: "main".into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -141,6 +161,7 @@ impl ProjectConfig {
                     ],
                 },
             },
+            execution: ExecutionConfig::default(),
         }
     }
 
@@ -170,6 +191,15 @@ impl ProjectConfig {
         }
         validate_codex_effort(self.providers.codex.reasoning_effort.as_deref())?;
         validate_claude_effort(self.providers.claude.effort.as_deref())?;
+        if self.execution.coding_tooling_executable.trim().is_empty() {
+            bail!("execution.coding_tooling_executable cannot be empty");
+        }
+        if self.execution.check_tier.trim().is_empty() {
+            bail!("execution.check_tier cannot be empty");
+        }
+        if self.execution.target_branch.trim().is_empty() {
+            bail!("execution.target_branch cannot be empty");
+        }
         Ok(())
     }
 }
@@ -212,5 +242,31 @@ mod tests {
         assert!(validate_codex_effort(Some("max")).is_err());
         assert!(validate_claude_effort(Some("max")).is_ok());
         assert!(validate_claude_effort(Some("minimal")).is_err());
+    }
+
+    #[test]
+    fn pre_execution_slice_config_uses_safe_execution_defaults() {
+        let encoded = r#"
+version = 1
+
+[project]
+id = "demo"
+
+[agent]
+provider = "codex"
+max_duration_seconds = 60
+
+[providers.codex]
+executable = "codex"
+sandbox = "workspace-write"
+approval_policy = "never"
+
+[providers.claude]
+executable = "claude"
+permission_mode = "dontAsk"
+allowed_tools = []
+"#;
+        let config: ProjectConfig = toml::from_str(encoded).unwrap();
+        assert_eq!(config.execution, ExecutionConfig::default());
     }
 }

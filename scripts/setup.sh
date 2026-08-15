@@ -27,7 +27,18 @@ while (($#)); do
 done
 
 case "$(uname -s)" in
-  Linux|Darwin) ;;
+  Linux)
+    command -v bwrap >/dev/null || {
+      echo "Missing required command: bwrap (install the bubblewrap package for fail-closed provider isolation)." >&2
+      exit 1
+    }
+    ;;
+  Darwin)
+    command -v sandbox-exec >/dev/null || {
+      echo "Missing required command: sandbox-exec (required for fail-closed provider isolation)." >&2
+      exit 1
+    }
+    ;;
   *) echo "This setup script supports macOS, Linux, and WSL. See README.md for Windows." >&2; exit 1 ;;
 esac
 

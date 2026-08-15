@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-contracts:candidate:v1",
+  "title": "Candidate v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "candidateId",
+    "kind",
+    "baselineGitSha",
+    "producedByAttemptId",
+    "changedPaths"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "candidateId": { "type": "string", "minLength": 1 },
+    "kind": { "enum": ["git-commit", "patch"] },
+    "baselineGitSha": { "type": "string", "pattern": "^[0-9a-fA-F]{40,64}$" },
+    "gitSha": { "type": "string", "pattern": "^[0-9a-fA-F]{40,64}$" },
+    "patchDigest": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9+._-]*:[A-Za-z0-9._~+/=-]+$"
+    },
+    "producedByAttemptId": { "type": "string", "minLength": 1 },
+    "changedPaths": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "git-commit" } }, "required": ["kind"] },
+      "then": { "required": ["gitSha"], "not": { "required": ["patchDigest"] } }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "patch" } }, "required": ["kind"] },
+      "then": { "required": ["patchDigest"], "not": { "required": ["gitSha"] } }
+    }
+  ]
+}
