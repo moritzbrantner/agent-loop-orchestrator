@@ -3,6 +3,7 @@ pub mod cli;
 pub mod config;
 pub mod contracts;
 pub mod doctor;
+pub mod execution;
 pub mod process;
 pub mod repository;
 pub mod server;

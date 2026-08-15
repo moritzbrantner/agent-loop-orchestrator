@@ -5,20 +5,28 @@ The Agent Loop Orchestrator is a single-user local control plane for coordinatin
 ## Language
 
 **Run Dashboard**:
-The localhost workspace that shows registered projects and their agent runs, lets its user start a new run, and displays each run's live status and output.
+The localhost workspace that creates local work items, starts their agent runs, displays output and checks, and records an explicit candidate decision.
 _Avoid_: Admin panel, control panel, web page
 
 **Run**:
-A recorded attempt to perform a user-supplied coding task in one registered project through a configured coding-agent provider.
+A durable canonical lifecycle for one local Work Item, including its exact baseline, single isolated Attempt, Candidate, checks, evidence, and decision.
 _Avoid_: Job, task, execution
 
 **Active Run**:
 The single Run currently launching or executing on the local service; no other Run may become active until it reaches a terminal outcome.
 _Avoid_: Current task, worker
 
-**Pending Run**:
-A single saved, editable request for a Run that cannot start while another Run is active and never starts automatically.
-_Avoid_: Queue item, scheduled run
+**Work Item**:
+A durable local request bound to one Registered Project, declared write scope, target branch, and exact baseline commit before execution begins.
+_Avoid_: GitHub Issue, pending run
+
+**Candidate**:
+The exact clean Git commit produced by an Attempt and retained by an immutable local ref for checking and decision.
+_Avoid_: Working tree, latest changes
+
+**Decision**:
+An explicit local approval or rejection bound to an exact Candidate. Approval may integrate locally; rejection never does.
+_Avoid_: Automatic merge, publication
 
 **Completion Notification**:
 An in-app and optional browser desktop notice that an Active Run has reached a terminal outcome.
@@ -37,7 +45,7 @@ A configured coding-agent runtime that can perform a Run, currently Codex or Cla
 _Avoid_: Model, agent
 
 **Run History**:
-The indefinitely retained local record of completed and in-progress Runs, including their status and captured output.
+The indefinitely retained local record of Runs, including attempts, output, candidates, checks, evidence, decisions, and local integration.
 _Avoid_: Logs, activity feed
 
 **Access Token**:

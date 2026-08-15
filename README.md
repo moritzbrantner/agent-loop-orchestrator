@@ -1,6 +1,6 @@
 # Agent Loop Orchestrator
 
-A single-user localhost control plane for creating, scheduling, executing, evaluating, and integrating coding-agent work.
+A single-user localhost control plane for creating, executing, checking, deciding, and locally integrating coding-agent work.
 
 The orchestrator is the local system of record that connects the rest of the coding-agent landscape without absorbing their responsibilities:
 
@@ -9,7 +9,7 @@ The orchestrator is the local system of record that connects the rest of the cod
 | `coding-agent-conventions` | Policy, principles, convention profiles, and stable convention IDs |
 | `coding-tooling` | Deterministic repository discovery, affected-scope analysis, and checks |
 | `agent-loop-setup` | Reusable worker procedures and environment-specific installation composition |
-| `agent-loop-orchestrator` | Repository bootstrap, execution adapters, tasks, scheduling, run state, authority, evidence, decisions, and integration |
+| `agent-loop-orchestrator` | Repository bootstrap, work items, isolated execution, run state, authority, evidence, decisions, and local integration |
 | `moonlight` | Baseline/candidate comparison and evaluation |
 | `local-refactor` | A specialized refactoring worker |
 
@@ -23,7 +23,7 @@ cd agent-loop-orchestrator
 ./setup.sh
 ```
 
-The script installs a minimal Rust toolchain when necessary, installs missing Claude Code and Codex CLIs from their official installers, builds `agent-loop`, installs it under `~/.local/bin`, and installs completion definitions for Bash, Zsh, or Fish. Use `--skip-providers` or `--skip-rust` when those dependencies are managed elsewhere.
+The script verifies the platform sandbox (`bubblewrap`/`bwrap` on Linux and WSL, `sandbox-exec` on macOS), installs a minimal Rust toolchain when necessary, installs missing Claude Code and Codex CLIs from their official installers, builds `agent-loop`, installs it under `~/.local/bin`, and installs completion definitions for Bash, Zsh, or Fish. Use `--skip-providers` or `--skip-rust` when those dependencies are managed elsewhere. Provider execution fails closed if the sandbox is unavailable.
 
 Provider authentication remains an explicit one-time user action:
 
@@ -43,26 +43,32 @@ agent-loop doctor
 
 `init` creates the versioned `.agent-loop/config.toml`, ignores local run evidence, and registers the repository in the per-user orchestrator registry. It does not overwrite an existing configuration unless you pass `--force`.
 
-Run a task with the configured provider or choose one for a single run:
+Create a bounded work item, start it, inspect the candidate, then approve or reject it:
 
 ```bash
-agent-loop run --prompt "Implement the next ready task"
-agent-loop run --provider claude --effort max --prompt-file task.md
-agent-loop run --provider codex --effort xhigh --prompt "Review the candidate"
+agent-loop work-item create --title "Add health endpoint" --prompt-file task.md --scope src --scope tests
+agent-loop start <work-item-id> --provider codex
+agent-loop show <run-id>
+agent-loop approve <run-id>
+# or: agent-loop reject <run-id> --reason "Not the intended behavior"
 ```
 
-Continue the same provider session:
+`agent-loop run --prompt "..."` is the one-command shorthand for creating and starting a whole-repository work item. It still stops at `awaiting_decision`; integration always requires an explicit approval.
 
-```bash
-agent-loop run --provider codex --resume <thread-id> --prompt "Apply the review findings"
-agent-loop run --provider claude --resume <session-id> --prompt "Run the final checks"
+Execution settings are repository-local and backwards-compatible with existing v1 config files:
+
+```toml
+[execution]
+coding_tooling_executable = "coding-tooling"
+check_tier = "fast"
+target_branch = "main"
 ```
 
 See [Claude and Codex adapters](docs/providers.md) for command mappings, permission defaults, event normalization, and the authority boundary.
 
 ## Run the LAN dashboard
 
-The dashboard is a React application served by the Rust service. It lists projects registered with `agent-loop init`, starts one active run at a time, keeps a single editable pending run, streams output, and preserves run history locally.
+The dashboard is a React application served by the Rust service. It creates durable work items for projects registered with `agent-loop init`, starts one active run at a time, streams output, displays candidates and deterministic checks, and requires an explicit approve/reject decision.
 
 Build the frontend once after changing its source:
 
@@ -85,25 +91,24 @@ For frontend development, run `bun run dev` from `web/` while the Rust service i
 
 ## Interchange contracts
 
-[`moritzbrantner/agent-contracts`](https://github.com/moritzbrantner/agent-contracts) owns all interchange semantics. This orchestrator pins revision `cf0d0c15a743cbf5358f4f3bdd83f38b6371cd98` and emits `agent.run/v1`, with its `agent.authority/v1`, `agent.task-packet/v1`, `agent.candidate/v1`, and `agent.component-lock/v1` records. The local [checksum-verified snapshot](contracts/agent-contracts/PROVENANCE.json) exists only so conformance tests run offline; it is not a fork or a normative schema source.
+[`moritzbrantner/agent-contracts`](https://github.com/moritzbrantner/agent-contracts) owns all interchange semantics. This orchestrator pins revision `cf0d0c15a743cbf5358f4f3bdd83f38b6371cd98` and emits `agent.run/v1`, with its `agent.authority/v1`, `agent.task-packet/v1`, `agent.candidate/v1`, `agent.check-result/v1`, and `agent.component-lock/v1` records. The local [checksum-verified snapshot](contracts/agent-contracts/PROVENANCE.json) exists only so conformance tests run offline; it is not a fork or a normative schema source.
 
 The orchestrator owns lifecycle and state: scheduling, dashboard projections, provider execution, durable evidence, and integration coordination. Provider-specific commands and UI payloads are local implementation details, not replacement contract models.
 
-## Intended vertical slice
+## Implemented local execution slice
 
-1. Create a work item with dependencies and declared scope.
-2. Select it when dependency-ready.
-3. Create an isolated Git worktree.
-4. Start one worker with explicit authority.
-5. Discover and run deterministic capabilities through `coding-tooling`.
-6. Record the resulting commit or patch as a candidate.
-7. Evaluate baseline against candidate through Moonlight.
-8. Store immutable evidence.
-9. Request a human or policy decision.
-10. Integrate locally or explicitly publish through an adapter.
+1. A local work item binds a registered project, declared write scope, target branch, and exact baseline SHA.
+2. One clean detached Git worktree is created for its single attempt.
+3. The selected Claude or Codex adapter receives the canonical `agent.task-packet/v1` and runs inside an OS filesystem sandbox with a read-only host view and write access only to the attempt worktree, detached worktree metadata, a run-local Git object store, and temporary files. Provider API access requires network, so the authority snapshot records network as unrestricted rather than claiming a domain boundary this slice cannot enforce.
+4. A successful provider must leave a clean descendant commit whose changed paths are within scope. The commit is retained under an immutable local candidate ref before the worktree is removed.
+5. The external `coding-tooling run --tier <tier> --strict --json` process discovers and executes repository checks. Canonical check results are ingested directly; the currently installed legacy envelope is translated only inside the typed adapter. Missing or malformed tooling stops the run explicitly.
+6. Passed required checks move the run to `awaiting_decision`. Rejection records a candidate-bound decision and leaves the target unchanged. Approval verifies the target still equals the bound baseline and integrates the exact candidate locally with a fast-forward.
+7. Work items, runs, attempts, provider output, task packets, candidates, checks, evidence, decisions, and integration results are persisted below the per-user Agent Loop data directory.
+
+This slice never pushes, opens a pull request, publishes remotely, invokes Moonlight, retries, or schedules parallel workers.
 
 ## Boundary
 
-The orchestrator owns coordination and durable run state. It does not own coding conventions, invent repository checks, decide semantic equivalence itself, or embed the implementation logic of specialist workers.
+The orchestrator owns coordination and durable run state. It does not own coding conventions, discover or invent repository checks, decide semantic equivalence itself, or embed Moonlight or specialist implementation logic.
 
 Contract evolution happens in `agent-contracts`; this repository updates its pin deliberately and validates emitted records against that exact revision.

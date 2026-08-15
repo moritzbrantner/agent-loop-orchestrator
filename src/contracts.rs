@@ -657,7 +657,7 @@ fn baseline(repository_root: &Path) -> Result<Baseline> {
     })
 }
 
-fn component_lock(repository_root: &Path, git_sha: &str) -> ComponentLock {
+pub fn component_lock(repository_root: &Path, git_sha: &str) -> ComponentLock {
     let mut protocols = BTreeMap::new();
     for protocol in [
         "agent.run",
@@ -665,6 +665,7 @@ fn component_lock(repository_root: &Path, git_sha: &str) -> ComponentLock {
         "agent.task-packet",
         "agent.candidate",
         "agent.component-lock",
+        "agent.check-result",
     ] {
         protocols.insert(protocol.into(), "v1".into());
     }
@@ -692,21 +693,21 @@ fn component_lock(repository_root: &Path, git_sha: &str) -> ComponentLock {
     }
 }
 
-fn selected_model(config: &ProjectConfig, provider: Provider) -> Option<String> {
+pub fn selected_model(config: &ProjectConfig, provider: Provider) -> Option<String> {
     match provider {
         Provider::Codex => config.providers.codex.model.clone(),
         Provider::Claude => config.providers.claude.model.clone(),
     }
 }
 
-fn repository_identity(repository_root: &Path) -> Option<String> {
+pub fn repository_identity(repository_root: &Path) -> Option<String> {
     git(repository_root, &["remote", "get-url", "origin"])
         .ok()
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
 }
 
-fn evidence_from_directory(directory: &Path) -> Result<Vec<Evidence>> {
+pub fn evidence_from_directory(directory: &Path) -> Result<Vec<Evidence>> {
     [
         ("provider-events", "events.jsonl", "application/x-ndjson"),
         ("provider-stdout", "raw.jsonl", "application/x-ndjson"),
@@ -732,6 +733,19 @@ fn evidence_from_directory(directory: &Path) -> Result<Vec<Evidence>> {
     .collect()
 }
 
+pub fn evidence_for_file(kind: &str, path: &Path, media_type: &str) -> Result<Evidence> {
+    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    Ok(Evidence {
+        schema_version: 1,
+        kind: kind.into(),
+        uri: name_for_uri(path),
+        digest: digest_bytes(&bytes),
+        media_type: Some(media_type.into()),
+        created_at: Utc::now(),
+        size_bytes: Some(bytes.len() as u64),
+    })
+}
+
 fn name_for_uri(path: &Path) -> String {
     format!("file://{}", path.display())
 }
@@ -752,7 +766,7 @@ pub fn digest_bytes(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
-fn digest_json(value: &impl Serialize) -> Result<String> {
+pub fn digest_json(value: &impl Serialize) -> Result<String> {
     Ok(digest_bytes(&serde_json::to_vec(value)?))
 }
 
