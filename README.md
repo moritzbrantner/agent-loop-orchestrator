@@ -70,6 +70,40 @@ target_branch = "main"
 
 See [Claude and Codex adapters](docs/providers.md) for command mappings, permission defaults, event normalization, and the authority boundary.
 
+## Stable control surface for skills
+
+`agent-loop control` is the machine-readable integration boundary for thin `agent-loop-setup` skills and local automation. Consumers should not parse the orchestrator's runtime files or database layout.
+
+Create bounded intent with explicit objective, acceptance criteria, dependencies, and scope:
+
+```bash
+agent-loop control work-item create \
+  --title "Add health endpoint" \
+  --objective "Add GET /health without changing existing API behavior" \
+  --acceptance tests=test:unit \
+  --acceptance build=build \
+  --scope src \
+  --scope tests
+```
+
+Then inspect readiness, execute, and make an exact-candidate decision:
+
+```bash
+agent-loop control work-item list
+agent-loop control start <work-item-id> --provider codex
+agent-loop control status <run-id>
+agent-loop control approve <run-id>
+# or: agent-loop control reject <run-id> --reason "Not the intended behavior"
+```
+
+A prior provider session can be continued with:
+
+```bash
+agent-loop control resume <prior-run-id>
+```
+
+Every `agent-loop control` invocation emits a versioned JSON envelope. `agent-loop doctor --json` remains the provider/environment preflight. See [Stable control surface](docs/control-surface.md) for the result shapes, readiness semantics, resume behavior, and error codes.
+
 ## Run the LAN dashboard
 
 The dashboard is a React application served by the Rust service. It creates durable work items for projects registered with `agent-loop init`, starts one active run at a time, streams output, displays candidates and deterministic checks, and requires an explicit approve/reject decision.
@@ -107,7 +141,7 @@ Neutral `agent.evidence/v1` references represent runtime, check, trace, or other
 4. A successful provider must leave a clean descendant commit whose changed paths are within scope. The commit is retained under an immutable local candidate ref before the worktree is removed.
 5. The external `coding-tooling run --tier <tier> --strict --json` process discovers and executes repository checks. Canonical check results are ingested directly; the currently installed legacy envelope is translated only inside the typed adapter. Missing or malformed tooling stops the run explicitly.
 6. Passed required checks move the run to `awaiting_decision`. Rejection records a candidate-bound decision and leaves the target unchanged. Approval verifies the target still equals the bound baseline and integrates the exact candidate locally with a fast-forward.
-7. Work items, runs, attempts, provider output, task packets, candidates, checks, evidence, decisions, and integration results are persisted below the per-user Agent Loop data directory.
+7. Work items, runs, attempts, provider output, task packets, candidates, checks, evidence, decisions, integration results, and control intent metadata are persisted below the per-user Agent Loop data directory.
 
 This slice never pushes, opens a pull request, publishes remotely, invokes Moonlight or `runtime-profiler`, retries, or schedules parallel workers.
 
