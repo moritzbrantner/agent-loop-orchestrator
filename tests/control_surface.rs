@@ -84,10 +84,7 @@ fn control_surface_covers_bounded_work_readiness_run_decision_and_resume() {
     let started = fixture.control(&["start", &foundation_id, "--provider", "codex"]);
     assert_eq!(started["ok"], true);
     assert_eq!(started["data"]["run"]["status"], "awaiting_decision");
-    let run_id = started["data"]["run"]["id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    let run_id = started["data"]["run"]["id"].as_str().unwrap().to_owned();
     let candidate = started["data"]["run"]["contract"]["candidates"][0]["gitSha"]
         .as_str()
         .unwrap()
@@ -110,7 +107,10 @@ fn control_surface_covers_bounded_work_readiness_run_decision_and_resume() {
         approved["data"]["run"]["contract"]["decisions"][0]["candidateIdentity"],
         candidate
     );
-    assert_eq!(git(fixture.repository.path(), &["rev-parse", "main"]), candidate);
+    assert_eq!(
+        git(fixture.repository.path(), &["rev-parse", "main"]),
+        candidate
+    );
 
     let ready = fixture.control(&["status", &dependent_id]);
     assert_eq!(ready["data"]["readiness"], "ready");
