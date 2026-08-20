@@ -118,7 +118,10 @@ pub fn intent_for(data_root: &Path, work_item: &WorkItem) -> Result<WorkItemInte
         }))
 }
 
-pub fn work_item_views(data_root: &Path, snapshot: &ExecutionSnapshot) -> Result<Vec<WorkItemView>> {
+pub fn work_item_views(
+    data_root: &Path,
+    snapshot: &ExecutionSnapshot,
+) -> Result<Vec<WorkItemView>> {
     snapshot
         .work_items
         .iter()
@@ -162,7 +165,11 @@ pub fn run_view(data_root: &Path, snapshot: &ExecutionSnapshot, run: &LocalRun) 
     })
 }
 
-pub fn ensure_ready(data_root: &Path, snapshot: &ExecutionSnapshot, work_item: &WorkItem) -> Result<()> {
+pub fn ensure_ready(
+    data_root: &Path,
+    snapshot: &ExecutionSnapshot,
+    work_item: &WorkItem,
+) -> Result<()> {
     let view = work_item_view(data_root, snapshot, work_item)?;
     match view.readiness {
         Readiness::Ready => Ok(()),
@@ -173,13 +180,19 @@ pub fn ensure_ready(data_root: &Path, snapshot: &ExecutionSnapshot, work_item: &
                 .map(|blocker| format!("{} ({})", blocker.work_item_id, blocker.status))
                 .collect::<Vec<_>>()
                 .join(", ");
-            bail!("work item {} is dependency-blocked by {blockers}", work_item.id)
+            bail!(
+                "work item {} is dependency-blocked by {blockers}",
+                work_item.id
+            )
         }
         Readiness::NotOpen => bail!("work item {} is not open", work_item.id),
     }
 }
 
-fn dependency_blockers(snapshot: &ExecutionSnapshot, dependencies: &[String]) -> Vec<DependencyBlocker> {
+fn dependency_blockers(
+    snapshot: &ExecutionSnapshot,
+    dependencies: &[String],
+) -> Vec<DependencyBlocker> {
     dependencies
         .iter()
         .filter_map(|dependency| {
@@ -191,7 +204,7 @@ fn dependency_blockers(snapshot: &ExecutionSnapshot, dependencies: &[String]) ->
                 Some(item) if item.status == WorkItemStatus::Approved => None,
                 Some(item) => Some(DependencyBlocker {
                     work_item_id: dependency.clone(),
-                    status: format!("{:?}", item.status).to_lowercase(),
+                    status: work_item_status_name(&item.status).into(),
                 }),
                 None => Some(DependencyBlocker {
                     work_item_id: dependency.clone(),
@@ -202,13 +215,24 @@ fn dependency_blockers(snapshot: &ExecutionSnapshot, dependencies: &[String]) ->
         .collect()
 }
 
+fn work_item_status_name(status: &WorkItemStatus) -> &'static str {
+    match status {
+        WorkItemStatus::Open => "open",
+        WorkItemStatus::Running => "running",
+        WorkItemStatus::AwaitingDecision => "awaiting_decision",
+        WorkItemStatus::Approved => "approved",
+        WorkItemStatus::Rejected => "rejected",
+        WorkItemStatus::Failed => "failed",
+        WorkItemStatus::Cancelled => "cancelled",
+    }
+}
+
 fn load(data_root: &Path) -> Result<PersistedControlMetadata> {
     let path = data_root.join(CONTROL_METADATA_FILE);
     if !path.exists() {
         return Ok(PersistedControlMetadata::default());
     }
-    serde_json::from_slice(&fs::read(&path)?)
-        .with_context(|| format!("parse {}", path.display()))
+    serde_json::from_slice(&fs::read(&path)?).with_context(|| format!("parse {}", path.display()))
 }
 
 fn write(data_root: &Path, metadata: &PersistedControlMetadata) -> Result<()> {
