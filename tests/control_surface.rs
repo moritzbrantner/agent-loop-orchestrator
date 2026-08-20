@@ -1,7 +1,7 @@
 #![cfg(target_os = "linux")]
 
 use std::{
-    fs,
+    env, fs,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Command, Output},
@@ -26,6 +26,42 @@ const TOOLING: &str = r#"#!/bin/sh
 set -eu
 candidate=$(git rev-parse HEAD)
 printf '{"schemaVersion":1,"checkId":"fake-check","capability":"test","candidate":{"kind":"git-commit","identity":"%s"},"outcome":"passed","required":true,"startedAt":"2026-08-20T20:00:00Z","finishedAt":"2026-08-20T20:00:01Z","exitCode":0,"evidence":[]}\n' "$candidate"
+"#;
+
+const BWRAP: &str = r#"#!/bin/sh
+set -eu
+chdir=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --setenv)
+      export "$2=$3"
+      shift 3
+      ;;
+    --chdir)
+      chdir=$2
+      shift 2
+      ;;
+    --ro-bind|--bind)
+      shift 3
+      ;;
+    --dev|--proc)
+      shift 2
+      ;;
+    --die-with-parent|--new-session)
+      shift
+      ;;
+    --)
+      shift
+      break
+      ;;
+    *)
+      printf 'unexpected fake bwrap argument: %s\n' "$1" >&2
+      exit 2
+      ;;
+  esac
+done
+[ -n "$chdir" ] && cd "$chdir"
+exec "$@"
 "#;
 
 #[test]
@@ -134,6 +170,7 @@ struct Fixture {
     repository: TempDir,
     provider: PathBuf,
     tooling: PathBuf,
+    bin: PathBuf,
 }
 
 impl Fixture {
@@ -155,14 +192,18 @@ impl Fixture {
 
         let provider = data.path().join("fake-codex");
         let tooling = data.path().join("fake-coding-tooling");
+        let bin = data.path().join("bin");
+        fs::create_dir(&bin).unwrap();
         executable(&provider, PROVIDER);
         executable(&tooling, TOOLING);
+        executable(&bin.join("bwrap"), BWRAP);
 
         let fixture = Self {
             data,
             repository,
             provider,
             tooling,
+            bin,
         };
         let init = fixture.command(&["init", "--provider", "codex"]);
         assert!(
@@ -179,6 +220,14 @@ impl Fixture {
             config.to_toml().unwrap(),
         )
         .unwrap();
+        git_ok(
+            fixture.repository.path(),
+            &["add", ".agent-loop/config.toml", ".gitignore"],
+        );
+        git_ok(
+            fixture.repository.path(),
+            &["commit", "-m", "configure agent loop"],
+        );
         fixture
     }
 
@@ -196,11 +245,17 @@ impl Fixture {
     }
 
     fn command(&self, args: &[&str]) -> Output {
+        let path = format!(
+            "{}:{}",
+            self.bin.display(),
+            env::var("PATH").unwrap_or_default()
+        );
         Command::new(env!("CARGO_BIN_EXE_agent-loop"))
             .args(args)
             .current_dir(self.repository.path())
             .env("XDG_DATA_HOME", self.data.path())
             .env("HOME", self.data.path())
+            .env("PATH", path)
             .output()
             .unwrap()
     }
