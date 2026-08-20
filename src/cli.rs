@@ -406,8 +406,9 @@ fn run_control(command: ControlCommands) -> Result<(&'static str, Value)> {
                 target_branch,
             } => {
                 let root = find_repository_root(&repository)?;
-                let config = ProjectConfig::load(&root)
-                    .with_context(|| format!("project configuration unavailable in {}", root.display()))?;
+                let config = ProjectConfig::load(&root).with_context(|| {
+                    format!("project configuration unavailable in {}", root.display())
+                })?;
                 let project = registered_project_for_root(&root, &config)?;
                 let target_branch = target_branch.unwrap_or(config.execution.target_branch);
                 let baseline_ref = baseline.unwrap_or_else(|| target_branch.clone());
@@ -423,7 +424,11 @@ fn run_control(command: ControlCommands) -> Result<(&'static str, Value)> {
                 let mut service = execution_service()?;
                 let snapshot = service.snapshot();
                 for dependency in &dependencies {
-                    if !snapshot.work_items.iter().any(|item| item.id == *dependency) {
+                    if !snapshot
+                        .work_items
+                        .iter()
+                        .any(|item| item.id == *dependency)
+                    {
                         bail!("dependency work item {dependency} was not found");
                     }
                 }
@@ -448,11 +453,17 @@ fn run_control(command: ControlCommands) -> Result<(&'static str, Value)> {
                     .iter()
                     .find(|item| item.id == work_item.id)
                     .context("created work item was not persisted")?;
-                Ok(("work_item", json!(control::work_item_view(&data_root, &snapshot, item)?)))
+                Ok((
+                    "work_item",
+                    json!(control::work_item_view(&data_root, &snapshot, item)?),
+                ))
             }
             ControlWorkItemCommands::List => {
                 let snapshot = execution_service()?.snapshot();
-                Ok(("work_items", json!(control::work_item_views(&data_root, &snapshot)?)))
+                Ok((
+                    "work_items",
+                    json!(control::work_item_views(&data_root, &snapshot)?),
+                ))
             }
         },
         ControlCommands::Start {
@@ -477,7 +488,10 @@ fn run_control(command: ControlCommands) -> Result<(&'static str, Value)> {
                 .unwrap_or(config.agent.provider);
             let run = service.run_work_item(&work_item_id, provider, None, |_| {})?;
             let snapshot = service.snapshot();
-            Ok(("run", json!(control::run_view(&data_root, &snapshot, &run)?)))
+            Ok((
+                "run",
+                json!(control::run_view(&data_root, &snapshot, &run)?),
+            ))
         }
         ControlCommands::Resume {
             run_id,
@@ -493,7 +507,9 @@ fn run_control(command: ControlCommands) -> Result<(&'static str, Value)> {
                 .cloned()
                 .with_context(|| format!("run {run_id} was not found"))?;
             if prior_run.status == crate::execution::LocalRunStatus::AwaitingDecision {
-                bail!("run {run_id} is awaiting a human decision; approve or reject it before resuming")
+                bail!(
+                    "run {run_id} is awaiting a human decision; approve or reject it before resuming"
+                )
             }
             let prior_item = snapshot
                 .work_items
@@ -547,14 +563,20 @@ fn run_control(command: ControlCommands) -> Result<(&'static str, Value)> {
                 |_| {},
             )?;
             let snapshot = service.snapshot();
-            Ok(("run", json!(control::run_view(&data_root, &snapshot, &run)?)))
+            Ok((
+                "run",
+                json!(control::run_view(&data_root, &snapshot, &run)?),
+            ))
         }
         ControlCommands::Status { id } => {
             let snapshot = execution_service()?.snapshot();
             if let Some(run) = snapshot.runs.iter().find(|run| run.id == id) {
                 Ok(("run", json!(control::run_view(&data_root, &snapshot, run)?)))
             } else if let Some(item) = snapshot.work_items.iter().find(|item| item.id == id) {
-                Ok(("work_item", json!(control::work_item_view(&data_root, &snapshot, item)?)))
+                Ok((
+                    "work_item",
+                    json!(control::work_item_view(&data_root, &snapshot, item)?),
+                ))
             } else {
                 bail!("no work item or run {id} was found")
             }
@@ -569,7 +591,10 @@ fn run_control(command: ControlCommands) -> Result<(&'static str, Value)> {
                 },
             )?;
             let snapshot = service.snapshot();
-            Ok(("run", json!(control::run_view(&data_root, &snapshot, &run)?)))
+            Ok((
+                "run",
+                json!(control::run_view(&data_root, &snapshot, &run)?),
+            ))
         }
         ControlCommands::Reject { run_id, reason } => {
             let mut service = execution_service()?;
@@ -581,7 +606,10 @@ fn run_control(command: ControlCommands) -> Result<(&'static str, Value)> {
                 },
             )?;
             let snapshot = service.snapshot();
-            Ok(("run", json!(control::run_view(&data_root, &snapshot, &run)?)))
+            Ok((
+                "run",
+                json!(control::run_view(&data_root, &snapshot, &run)?),
+            ))
         }
     }
 }
@@ -617,17 +645,28 @@ fn control_error_code(error: &anyhow::Error) -> &'static str {
     let message = format!("{error:#}").to_lowercase();
     if message.contains("dependency-blocked") {
         "dependency_blocked"
-    } else if message.contains("awaiting a human decision") || message.contains("awaiting a decision") {
+    } else if message.contains("awaiting a human decision")
+        || message.contains("awaiting a decision")
+    {
         "awaiting_decision"
     } else if message.contains("was not found") || message.contains("no work item or run") {
         "not_found"
-    } else if message.contains("project configuration unavailable") || message.contains("config.toml") {
+    } else if message.contains("project configuration unavailable")
+        || message.contains("config.toml")
+    {
         "missing_project_config"
-    } else if message.contains("provider") && (message.contains("unavailable") || message.contains("not ready")) {
+    } else if message.contains("provider")
+        && (message.contains("unavailable") || message.contains("not ready"))
+    {
         "provider_unavailable"
-    } else if message.contains("coding-tooling") || message.contains("deterministic checks did not pass") {
+    } else if message.contains("coding-tooling")
+        || message.contains("deterministic checks did not pass")
+    {
         "tooling_unavailable_or_failed"
-    } else if message.contains("not open") || message.contains("acceptance must") || message.contains("scope") {
+    } else if message.contains("not open")
+        || message.contains("acceptance must")
+        || message.contains("scope")
+    {
         "invalid_task"
     } else if message.contains("another local run is active") {
         "conflict"
