@@ -291,3 +291,51 @@ fn open_lock(data_root: &Path) -> Result<File> {
         .open(&path)
         .with_context(|| format!("open {}", path.display()))
 }
+
+
+#[cfg(test)]
+mod tests {
+    use std::{sync::Arc, thread};
+
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn concurrent_metadata_updates_preserve_every_work_item() {
+        let data = Arc::new(tempdir().unwrap());
+        let work_items = (0..24).map(|_| Uuid::new_v4()).collect::<Vec<_>>();
+        let handles = work_items
+            .iter()
+            .copied()
+            .map(|work_item_id| {
+                let data = Arc::clone(&data);
+                thread::spawn(move || {
+                    record_work_item_intent(
+                        data.path(),
+                        work_item_id,
+                        format!("objective-{work_item_id}"),
+                        vec![AcceptanceCriterion {
+                            id: format!("check-{work_item_id}"),
+                            capability: "test".into(),
+                            component: None,
+                            required: true,
+                        }],
+                        Vec::new(),
+                    )
+                    .unwrap();
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let metadata = load(data.path()).unwrap();
+        assert_eq!(metadata.work_items.len(), work_items.len());
+        for work_item_id in work_items {
+            assert!(metadata.work_items.contains_key(&work_item_id.to_string()));
+        }
+    }
+}
