@@ -12,6 +12,13 @@ use tempfile::TempDir;
 
 const PROVIDER: &str = r#"#!/bin/sh
 set -eu
+case "$*" in
+  *'"id": "tests"'*'"capability": "test"'*) ;;
+  *)
+    printf 'task packet did not contain the stored acceptance criterion\n' >&2
+    exit 3
+    ;;
+esac
 if [ -f greeting.txt ]; then
   printf 'again\n' >> greeting.txt
 else
