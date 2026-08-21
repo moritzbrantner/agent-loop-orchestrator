@@ -328,7 +328,19 @@ pub fn run() -> Result<()> {
                 .map(Provider::from_str)
                 .transpose()?
                 .unwrap_or(config.agent.provider);
-            let run = service.run_work_item(&work_item_id, provider, None, |_| {})?;
+            let intent = control::intent_for(&data_root, &item)?;
+            let run = service.run_work_item_with_overrides(
+                &work_item_id,
+                provider,
+                ExecutionOverrides {
+                    objective: Some(intent.objective),
+                    acceptance: Some(intent.acceptance),
+                    dependencies: Some(intent.dependencies),
+                    ..ExecutionOverrides::default()
+                },
+                None,
+                |_| {},
+            )?;
             println!("{}", serde_json::to_string_pretty(&run)?);
         }
         Commands::Show { id } => {
@@ -558,6 +570,9 @@ fn run_control(command: ControlCommands) -> Result<(&'static str, Value)> {
                     model,
                     effort,
                     resume_session: Some(session),
+                    objective: Some(intent.objective),
+                    acceptance: Some(intent.acceptance),
+                    dependencies: Some(intent.dependencies),
                 },
                 None,
                 |_| {},
