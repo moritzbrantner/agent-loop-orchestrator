@@ -259,6 +259,7 @@ pub fn run() -> Result<()> {
                     model,
                     effort,
                     resume_session: resume,
+                    ..ExecutionOverrides::default()
                 },
                 None,
                 |_| {},
@@ -328,19 +329,7 @@ pub fn run() -> Result<()> {
                 .map(Provider::from_str)
                 .transpose()?
                 .unwrap_or(config.agent.provider);
-            let intent = control::intent_for(&data_root, &item)?;
-            let run = service.run_work_item_with_overrides(
-                &work_item_id,
-                provider,
-                ExecutionOverrides {
-                    objective: Some(intent.objective),
-                    acceptance: Some(intent.acceptance),
-                    dependencies: Some(intent.dependencies),
-                    ..ExecutionOverrides::default()
-                },
-                None,
-                |_| {},
-            )?;
+            let run = service.run_work_item(&work_item_id, provider, None, |_| {})?;
             println!("{}", serde_json::to_string_pretty(&run)?);
         }
         Commands::Show { id } => {
@@ -498,7 +487,21 @@ fn run_control(command: ControlCommands) -> Result<(&'static str, Value)> {
                 .map(Provider::from_str)
                 .transpose()?
                 .unwrap_or(config.agent.provider);
-            let run = service.run_work_item(&work_item_id, provider, None, |_| {})?;
+            let intent = control::intent_for(&data_root, &item)?;
+            let acceptance =
+                (!intent.acceptance.is_empty()).then_some(intent.acceptance);
+            let run = service.run_work_item_with_overrides(
+                &work_item_id,
+                provider,
+                ExecutionOverrides {
+                    objective: Some(intent.objective),
+                    acceptance,
+                    dependencies: Some(intent.dependencies),
+                    ..ExecutionOverrides::default()
+                },
+                None,
+                |_| {},
+            )?;
             let snapshot = service.snapshot();
             Ok((
                 "run",
@@ -571,7 +574,7 @@ fn run_control(command: ControlCommands) -> Result<(&'static str, Value)> {
                     effort,
                     resume_session: Some(session),
                     objective: Some(intent.objective),
-                    acceptance: Some(intent.acceptance),
+                    acceptance: (!intent.acceptance.is_empty()).then_some(intent.acceptance),
                     dependencies: Some(intent.dependencies),
                 },
                 None,
