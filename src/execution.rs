@@ -495,7 +495,9 @@ impl ExecutionService {
                 .checks
                 .iter()
                 .any(|check| check.required && check.outcome != CheckOutcome::Passed)
-            || !required_acceptance_is_satisfied(&packet.acceptance, &run.contract.checks)
+            || overrides.acceptance.as_ref().is_some_and(|acceptance| {
+                !required_acceptance_is_satisfied(acceptance, &run.contract.checks)
+            })
         {
             return self.finish_failed(
                 run,
