@@ -14,7 +14,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Install Bubblewrap
-        run: sudo apt-get update && sudo apt-get install --yes bubblewrap
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap
+          sudo chmod u+s "$(command -v bwrap)"
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
       - name: Format
