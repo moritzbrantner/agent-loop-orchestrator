@@ -251,7 +251,7 @@ impl Fixture {
         command.extend_from_slice(args);
         let output = self.command(&command);
         let stdout = String::from_utf8(output.stdout).unwrap();
-        serde_json::from_str(stdout.trim()).unwrap_or_else(|error| {
+        serde_json::from_str(stdout.lines().last().unwrap_or_default()).unwrap_or_else(|error| {
             panic!(
                 "control output was not JSON: {error}\nstdout: {stdout}\nstderr: {}",
                 String::from_utf8_lossy(&output.stderr)
