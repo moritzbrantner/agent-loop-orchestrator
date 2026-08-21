@@ -289,7 +289,6 @@ fn open_lock(data_root: &Path) -> Result<File> {
         .with_context(|| format!("open {}", path.display()))
 }
 
-
 #[cfg(test)]
 mod tests {
     use std::{sync::Arc, thread};
