@@ -153,7 +153,6 @@ pub struct ExecutionOverrides {
     pub objective: Option<String>,
     pub acceptance: Option<Vec<AcceptanceCriterion>>,
     pub dependencies: Option<Vec<String>>,
-    pub quiet: bool,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -370,7 +369,6 @@ impl ExecutionService {
             &run_directory,
             Duration::from_secs(config.agent.max_duration_seconds),
             cancellation,
-            !overrides.quiet,
             |event| {
                 observe(event.clone());
                 let line = event.into();
