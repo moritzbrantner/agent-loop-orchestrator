@@ -254,10 +254,7 @@ fn load_unlocked(data_root: &Path) -> Result<PersistedControlMetadata> {
 
 fn write_unlocked(data_root: &Path, metadata: &PersistedControlMetadata) -> Result<()> {
     let path = data_root.join(CONTROL_METADATA_FILE);
-    let temporary = data_root.join(format!(
-        "{CONTROL_METADATA_FILE}.{}.tmp",
-        Uuid::new_v4()
-    ));
+    let temporary = data_root.join(format!("{CONTROL_METADATA_FILE}.{}.tmp", Uuid::new_v4()));
     let result = (|| {
         fs::write(&temporary, serde_json::to_vec_pretty(metadata)?)
             .with_context(|| format!("write {}", temporary.display()))?;
