@@ -1,7 +1,12 @@
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{
+    collections::BTreeMap,
+    fs::{self, File, OpenOptions},
+    path::Path,
+};
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -11,6 +16,7 @@ use crate::{
 };
 
 const CONTROL_METADATA_FILE: &str = "control-metadata.json";
+const CONTROL_METADATA_LOCK_FILE: &str = "control-metadata.lock";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -89,8 +95,9 @@ pub fn record_work_item_intent(
     if objective.trim().is_empty() {
         bail!("objective cannot be empty");
     }
-    let snapshot = load(data_root)?;
-    let mut metadata = snapshot;
+    fs::create_dir_all(data_root)?;
+    let lock = lock_exclusive(data_root)?;
+    let mut metadata = load_unlocked(data_root)?;
     metadata.work_items.insert(
         work_item_id.to_string(),
         WorkItemIntent {
@@ -101,7 +108,9 @@ pub fn record_work_item_intent(
             created_at: Utc::now(),
         },
     );
-    write(data_root, &metadata)
+    write_unlocked(data_root, &metadata)?;
+    FileExt::unlock(&lock)?;
+    Ok(())
 }
 
 pub fn intent_for(data_root: &Path, work_item: &WorkItem) -> Result<WorkItemIntent> {
@@ -228,6 +237,14 @@ fn work_item_status_name(status: &WorkItemStatus) -> &'static str {
 }
 
 fn load(data_root: &Path) -> Result<PersistedControlMetadata> {
+    fs::create_dir_all(data_root)?;
+    let lock = lock_shared(data_root)?;
+    let metadata = load_unlocked(data_root);
+    FileExt::unlock(&lock)?;
+    metadata
+}
+
+fn load_unlocked(data_root: &Path) -> Result<PersistedControlMetadata> {
     let path = data_root.join(CONTROL_METADATA_FILE);
     if !path.exists() {
         return Ok(PersistedControlMetadata::default());
@@ -235,11 +252,42 @@ fn load(data_root: &Path) -> Result<PersistedControlMetadata> {
     serde_json::from_slice(&fs::read(&path)?).with_context(|| format!("parse {}", path.display()))
 }
 
-fn write(data_root: &Path, metadata: &PersistedControlMetadata) -> Result<()> {
-    fs::create_dir_all(data_root)?;
+fn write_unlocked(data_root: &Path, metadata: &PersistedControlMetadata) -> Result<()> {
     let path = data_root.join(CONTROL_METADATA_FILE);
-    let temporary = data_root.join(format!("{CONTROL_METADATA_FILE}.tmp"));
-    fs::write(&temporary, serde_json::to_vec_pretty(metadata)?)
-        .with_context(|| format!("write {}", temporary.display()))?;
-    fs::rename(&temporary, &path).with_context(|| format!("replace {}", path.display()))
+    let temporary = data_root.join(format!(
+        "{CONTROL_METADATA_FILE}.{}.tmp",
+        Uuid::new_v4()
+    ));
+    let result = (|| {
+        fs::write(&temporary, serde_json::to_vec_pretty(metadata)?)
+            .with_context(|| format!("write {}", temporary.display()))?;
+        fs::rename(&temporary, &path).with_context(|| format!("replace {}", path.display()))
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+fn lock_shared(data_root: &Path) -> Result<File> {
+    let file = open_lock(data_root)?;
+    FileExt::lock_shared(&file)?;
+    Ok(file)
+}
+
+fn lock_exclusive(data_root: &Path) -> Result<File> {
+    let file = open_lock(data_root)?;
+    FileExt::lock_exclusive(&file)?;
+    Ok(file)
+}
+
+fn open_lock(data_root: &Path) -> Result<File> {
+    let path = data_root.join(CONTROL_METADATA_LOCK_FILE);
+    OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("open {}", path.display()))
 }
