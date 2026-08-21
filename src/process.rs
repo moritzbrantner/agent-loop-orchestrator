@@ -54,7 +54,7 @@ pub fn execute(
     run_directory: &Path,
     timeout: Duration,
 ) -> Result<RunOutcome> {
-    execute_observed(adapter, spec, run_directory, timeout, None, |_| {})
+    execute_observed(adapter, spec, run_directory, timeout, None, true, |_| {})
 }
 
 pub fn execute_observed(
@@ -63,6 +63,7 @@ pub fn execute_observed(
     run_directory: &Path,
     timeout: Duration,
     cancellation: Option<&AtomicBool>,
+    echo_output: bool,
     mut observe: impl FnMut(ProcessEvent),
 ) -> Result<RunOutcome> {
     fs::create_dir_all(run_directory)
@@ -118,7 +119,9 @@ pub fn execute_observed(
             Ok(OutputLine::Stdout(line)) => {
                 observe(ProcessEvent::Stdout(line.clone()));
                 writeln!(raw, "{line}")?;
-                println!("{line}");
+                if echo_output {
+                    println!("{line}");
+                }
                 match serde_json::from_str::<Value>(&line) {
                     Ok(value) => {
                         if provider_session_id.is_none() {
@@ -149,7 +152,9 @@ pub fn execute_observed(
             Ok(OutputLine::Stderr(line)) => {
                 observe(ProcessEvent::Stderr(line.clone()));
                 writeln!(errors, "{line}")?;
-                eprintln!("{line}");
+                if echo_output {
+                    eprintln!("{line}");
+                }
             }
             Ok(OutputLine::StdoutClosed) => stdout_closed = true,
             Ok(OutputLine::StderrClosed) => stderr_closed = true,
