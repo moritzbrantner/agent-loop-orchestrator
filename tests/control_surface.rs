@@ -25,7 +25,7 @@ printf '%s\n' '{"type":"thread.started","thread_id":"fake-thread"}'
 const TOOLING: &str = r#"#!/bin/sh
 set -eu
 candidate=$(git rev-parse HEAD)
-printf '{"schemaVersion":1,"checkId":"fake-check","capability":"test","candidate":{"kind":"git-commit","identity":"%s"},"outcome":"passed","required":true,"startedAt":"2026-08-20T20:00:00Z","finishedAt":"2026-08-20T20:00:01Z","exitCode":0,"evidence":[]}\n' "$candidate"
+printf '{"schemaVersion":1,"checkId":"tests","capability":"test","candidate":{"kind":"git-commit","identity":"%s"},"outcome":"passed","required":true,"startedAt":"2026-08-20T20:00:00Z","finishedAt":"2026-08-20T20:00:01Z","exitCode":0,"evidence":[]}\n' "$candidate"
 "#;
 
 const BWRAP: &str = r#"#!/bin/sh
@@ -138,6 +138,14 @@ fn control_surface_covers_bounded_work_readiness_run_decision_and_resume() {
     assert_eq!(
         status["data"]["run"]["contract"]["checks"][0]["outcome"],
         "passed"
+    );
+    assert_eq!(
+        status["data"]["run"]["contract"]["checks"][0]["checkId"],
+        "tests"
+    );
+    assert_eq!(
+        status["data"]["run"]["contract"]["checks"][0]["capability"],
+        "test"
     );
 
     let approved = fixture.control(&["approve", &run_id]);
