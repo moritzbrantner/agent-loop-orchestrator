@@ -496,6 +496,7 @@ fn run_control(command: ControlCommands) -> Result<(&'static str, Value)> {
                     objective: Some(intent.objective),
                     acceptance,
                     dependencies: Some(intent.dependencies),
+                    quiet: true,
                     ..ExecutionOverrides::default()
                 },
                 None,
@@ -575,6 +576,7 @@ fn run_control(command: ControlCommands) -> Result<(&'static str, Value)> {
                     objective: Some(intent.objective),
                     acceptance: (!intent.acceptance.is_empty()).then_some(intent.acceptance),
                     dependencies: Some(intent.dependencies),
+                    quiet: true,
                 },
                 None,
                 |_| {},
