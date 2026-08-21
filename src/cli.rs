@@ -488,8 +488,7 @@ fn run_control(command: ControlCommands) -> Result<(&'static str, Value)> {
                 .transpose()?
                 .unwrap_or(config.agent.provider);
             let intent = control::intent_for(&data_root, &item)?;
-            let acceptance =
-                (!intent.acceptance.is_empty()).then_some(intent.acceptance);
+            let acceptance = (!intent.acceptance.is_empty()).then_some(intent.acceptance);
             let run = service.run_work_item_with_overrides(
                 &work_item_id,
                 provider,
