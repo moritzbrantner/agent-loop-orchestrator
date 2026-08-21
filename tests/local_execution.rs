@@ -31,7 +31,12 @@ fn successful_run_integrates_the_exact_checked_candidate() {
         .run_work_item(&work_item.id, Provider::Codex, None, |_| {})
         .unwrap();
     let run_id = run.id;
-    assert_eq!(run.status, LocalRunStatus::AwaitingDecision);
+    assert_eq!(
+        run.status,
+        LocalRunStatus::AwaitingDecision,
+        "run failed: {:?}",
+        run.error
+    );
     let candidate = run.contract.candidates[0].git_sha.clone().unwrap();
     assert_eq!(run.contract.checks.len(), 1);
     assert!(!run.contract.authority.may_integrate);

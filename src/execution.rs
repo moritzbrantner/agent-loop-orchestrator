@@ -150,6 +150,9 @@ pub struct ExecutionOverrides {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub resume_session: Option<String>,
+    pub objective: Option<String>,
+    pub acceptance: Option<Vec<AcceptanceCriterion>>,
+    pub dependencies: Option<Vec<String>>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -278,7 +281,7 @@ impl ExecutionService {
             &work_item,
             &config,
             provider,
-            overrides.model.as_deref(),
+            &overrides,
             &worktree_path,
             &run_directory,
         )?;
@@ -490,6 +493,9 @@ impl ExecutionService {
                 .checks
                 .iter()
                 .any(|check| check.required && check.outcome != CheckOutcome::Passed)
+            || overrides.acceptance.as_ref().is_some_and(|acceptance| {
+                !required_acceptance_is_satisfied(acceptance, &run.contract.checks)
+            })
         {
             return self.finish_failed(
                 run,
@@ -956,7 +962,7 @@ fn build_contracts(
     work_item: &WorkItem,
     config: &ProjectConfig,
     provider: Provider,
-    model_override: Option<&str>,
+    overrides: &ExecutionOverrides,
     worktree_path: &Path,
     run_directory: &Path,
 ) -> Result<(Run, TaskPacket)> {
@@ -1017,7 +1023,7 @@ fn build_contracts(
             id: work_item.id.to_string(),
             version: "1".into(),
             title: Some(work_item.title.clone()),
-            dependencies: Vec::new(),
+            dependencies: overrides.dependencies.clone().unwrap_or_default(),
             declared_scope: work_item.declared_scope.clone(),
         },
         baseline: work_item.baseline.clone(),
@@ -1030,8 +1036,9 @@ fn build_contracts(
         agent: RunAgent {
             adapter: adapter_name.clone(),
             identity: format!("{adapter_name}-provider"),
-            model: model_override
-                .map(str::to_owned)
+            model: overrides
+                .model
+                .clone()
                 .or_else(|| contracts::selected_model(config, provider)),
             prompt_digest: Some(contracts::digest_bytes(work_item.prompt.as_bytes())),
             configuration_digest: contracts::digest_bytes(config.to_toml()?.as_bytes()),
@@ -1062,17 +1069,24 @@ fn build_contracts(
         convention_refs: vec!["repository-default".into()],
         stage: "implementation".into(),
         target_surfaces: work_item.declared_scope.clone(),
-        behavioral_scope: vec![work_item.prompt.clone()],
+        behavioral_scope: vec![
+            overrides
+                .objective
+                .clone()
+                .unwrap_or_else(|| work_item.prompt.clone()),
+        ],
         write_scope: work_item.declared_scope.clone(),
         protected_behavior: Vec::new(),
         excluded_capabilities: vec!["remote-publication".into()],
-        dependencies: Vec::new(),
-        acceptance: vec![AcceptanceCriterion {
-            id: "deterministic-checks".into(),
-            capability: format!("validation-tier:{}", config.execution.check_tier),
-            component: None,
-            required: true,
-        }],
+        dependencies: overrides.dependencies.clone().unwrap_or_default(),
+        acceptance: overrides.acceptance.clone().unwrap_or_else(|| {
+            vec![AcceptanceCriterion {
+                id: "deterministic-checks".into(),
+                capability: format!("validation-tier:{}", config.execution.check_tier),
+                component: None,
+                required: true,
+            }]
+        }),
         expected_capability_state: ExpectedCapabilityState::Satisfied,
         handoff: HandoffRequirements {
             candidate_required: true,
@@ -1083,6 +1097,27 @@ fn build_contracts(
         authority,
     };
     Ok((contract, packet))
+}
+
+fn required_acceptance_is_satisfied(
+    acceptance: &[AcceptanceCriterion],
+    checks: &[CheckResult],
+) -> bool {
+    acceptance
+        .iter()
+        .filter(|criterion| criterion.required)
+        .all(|criterion| {
+            checks.iter().any(|check| {
+                check.required
+                    && check.outcome == CheckOutcome::Passed
+                    && check.check_id == criterion.id
+                    && check.capability == criterion.capability
+                    && criterion
+                        .component
+                        .as_ref()
+                        .is_none_or(|component| check.component.as_ref() == Some(component))
+            })
+        })
 }
 
 fn write_contract_artifacts(run: &LocalRun, packet: &TaskPacket, directory: &Path) -> Result<()> {

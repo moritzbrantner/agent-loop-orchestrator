@@ -1,7 +1,9 @@
 pub mod adapters;
+#[allow(clippy::large_enum_variant)]
 pub mod cli;
 pub mod config;
 pub mod contracts;
+pub mod control;
 pub mod doctor;
 pub mod execution;
 pub mod process;

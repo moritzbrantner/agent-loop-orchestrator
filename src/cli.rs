@@ -3,12 +3,13 @@ use std::{fs, io, net::SocketAddr, path::PathBuf, str::FromStr};
 use anyhow::{Context, Result, bail};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::{
     adapters::Provider,
     config::ProjectConfig,
-    doctor,
+    control,
     execution::{CreateWorkItem, DecisionRequest, ExecutionOverrides, ExecutionService},
     repository::{self, RegisteredProject, find_repository_root},
 };
@@ -53,6 +54,11 @@ enum Commands {
     WorkItem {
         #[command(subcommand)]
         command: WorkItemCommands,
+    },
+    /// Stable machine-readable integration boundary for thin skills and automation.
+    Control {
+        #[command(subcommand)]
+        command: ControlCommands,
     },
     /// Start one open work item through its configured provider.
     Start {
@@ -119,6 +125,70 @@ enum WorkItemCommands {
     List,
 }
 
+#[derive(Debug, Subcommand)]
+enum ControlCommands {
+    /// Create or list bounded local work items with explicit intent metadata.
+    WorkItem {
+        #[command(subcommand)]
+        command: ControlWorkItemCommands,
+    },
+    /// Start one dependency-ready work item.
+    Start {
+        work_item_id: Uuid,
+        #[arg(long)]
+        provider: Option<String>,
+    },
+    /// Continue the provider session from a prior run in a fresh bounded work item.
+    Resume {
+        run_id: Uuid,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        effort: Option<String>,
+    },
+    /// Inspect one work item or run with readiness and canonical run state.
+    Status { id: Uuid },
+    /// Approve and locally integrate an exact awaiting-decision candidate.
+    Approve {
+        run_id: Uuid,
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Reject an exact awaiting-decision candidate without integration.
+    Reject {
+        run_id: Uuid,
+        #[arg(long)]
+        reason: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ControlWorkItemCommands {
+    /// Create a bounded work item from explicit objective, acceptance, dependencies, and scope.
+    Create {
+        #[arg(long, default_value = ".")]
+        repository: PathBuf,
+        #[arg(long)]
+        title: String,
+        #[arg(long, conflicts_with = "objective_file")]
+        objective: Option<String>,
+        #[arg(long, value_name = "FILE", conflicts_with = "objective")]
+        objective_file: Option<PathBuf>,
+        #[arg(long = "acceptance", value_name = "ID=CAPABILITY")]
+        acceptance: Vec<String>,
+        #[arg(long = "dependency", value_name = "WORK_ITEM_ID")]
+        dependencies: Vec<Uuid>,
+        #[arg(long = "scope", default_value = ".")]
+        declared_scope: Vec<String>,
+        #[arg(long)]
+        baseline: Option<String>,
+        #[arg(long)]
+        target_branch: Option<String>,
+    },
+    /// List bounded work items with deterministic readiness and blockers.
+    List,
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum CompletionShell {
     Bash,
@@ -170,11 +240,18 @@ pub fn run() -> Result<()> {
             let work_item = service.create_work_item(CreateWorkItem {
                 project,
                 title: prompt.lines().next().unwrap_or("Local work item").into(),
-                prompt,
+                prompt: prompt.clone(),
                 declared_scope: vec![".".into()],
                 baseline_ref: config.execution.target_branch.clone(),
                 target_branch: config.execution.target_branch,
             })?;
+            control::record_work_item_intent(
+                &repository::data_directory()?,
+                work_item.id,
+                prompt,
+                Vec::new(),
+                Vec::new(),
+            )?;
             let run = service.run_work_item_with_overrides(
                 &work_item.id,
                 provider,
@@ -182,6 +259,7 @@ pub fn run() -> Result<()> {
                     model,
                     effort,
                     resume_session: resume,
+                    ..ExecutionOverrides::default()
                 },
                 None,
                 |_| {},
@@ -208,14 +286,22 @@ pub fn run() -> Result<()> {
                 let target_branch = target_branch.unwrap_or(config.execution.target_branch);
                 let baseline_ref = baseline.unwrap_or_else(|| target_branch.clone());
                 let mut service = execution_service()?;
+                let objective = read_prompt(prompt, prompt_file)?;
                 let work_item = service.create_work_item(CreateWorkItem {
                     project,
                     title,
-                    prompt: read_prompt(prompt, prompt_file)?,
+                    prompt: objective.clone(),
                     declared_scope,
                     baseline_ref,
                     target_branch,
                 })?;
+                control::record_work_item_intent(
+                    &repository::data_directory()?,
+                    work_item.id,
+                    objective,
+                    Vec::new(),
+                    Vec::new(),
+                )?;
                 println!("{}", serde_json::to_string_pretty(&work_item)?);
             }
             WorkItemCommands::List => {
@@ -225,6 +311,7 @@ pub fn run() -> Result<()> {
                 );
             }
         },
+        Commands::Control { command } => emit_control(run_control(command)),
         Commands::Start {
             work_item_id,
             provider,
@@ -286,7 +373,7 @@ pub fn run() -> Result<()> {
             let config = find_repository_root(&repository)
                 .ok()
                 .and_then(|root| ProjectConfig::load(&root).ok());
-            doctor::run(config.as_ref(), provider, json)?;
+            crate::doctor::run(config.as_ref(), provider, json)?;
         }
         Commands::Serve { bind } => {
             tokio::runtime::Runtime::new()?
@@ -302,6 +389,307 @@ pub fn run() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn run_control(command: ControlCommands) -> Result<(&'static str, Value)> {
+    let data_root = repository::data_directory()?;
+    match command {
+        ControlCommands::WorkItem { command } => match command {
+            ControlWorkItemCommands::Create {
+                repository,
+                title,
+                objective,
+                objective_file,
+                acceptance,
+                dependencies,
+                declared_scope,
+                baseline,
+                target_branch,
+            } => {
+                let root = find_repository_root(&repository)?;
+                let config = ProjectConfig::load(&root).with_context(|| {
+                    format!("project configuration unavailable in {}", root.display())
+                })?;
+                let project = registered_project_for_root(&root, &config)?;
+                let target_branch = target_branch.unwrap_or(config.execution.target_branch);
+                let baseline_ref = baseline.unwrap_or_else(|| target_branch.clone());
+                let objective = read_prompt(objective, objective_file)?;
+                let acceptance = acceptance
+                    .iter()
+                    .map(|value| control::parse_acceptance(value))
+                    .collect::<Result<Vec<_>>>()?;
+                let dependency_ids = dependencies
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>();
+                let mut service = execution_service()?;
+                let snapshot = service.snapshot();
+                for dependency in &dependencies {
+                    if !snapshot
+                        .work_items
+                        .iter()
+                        .any(|item| item.id == *dependency)
+                    {
+                        bail!("dependency work item {dependency} was not found");
+                    }
+                }
+                let work_item = service.create_work_item(CreateWorkItem {
+                    project,
+                    title,
+                    prompt: objective.clone(),
+                    declared_scope,
+                    baseline_ref,
+                    target_branch,
+                })?;
+                control::record_work_item_intent(
+                    &data_root,
+                    work_item.id,
+                    objective,
+                    acceptance,
+                    dependency_ids,
+                )?;
+                let snapshot = service.snapshot();
+                let item = snapshot
+                    .work_items
+                    .iter()
+                    .find(|item| item.id == work_item.id)
+                    .context("created work item was not persisted")?;
+                Ok((
+                    "work_item",
+                    json!(control::work_item_view(&data_root, &snapshot, item)?),
+                ))
+            }
+            ControlWorkItemCommands::List => {
+                let snapshot = execution_service()?.snapshot();
+                Ok((
+                    "work_items",
+                    json!(control::work_item_views(&data_root, &snapshot)?),
+                ))
+            }
+        },
+        ControlCommands::Start {
+            work_item_id,
+            provider,
+        } => {
+            let mut service = execution_service()?;
+            let snapshot = service.snapshot();
+            let item = snapshot
+                .work_items
+                .iter()
+                .find(|item| item.id == work_item_id)
+                .cloned()
+                .with_context(|| format!("work item {work_item_id} was not found"))?;
+            control::ensure_ready(&data_root, &snapshot, &item)?;
+            let config = ProjectConfig::load(&item.repository_root)
+                .context("project configuration unavailable")?;
+            let provider = provider
+                .as_deref()
+                .map(Provider::from_str)
+                .transpose()?
+                .unwrap_or(config.agent.provider);
+            let intent = control::intent_for(&data_root, &item)?;
+            let acceptance = (!intent.acceptance.is_empty()).then_some(intent.acceptance);
+            let run = service.run_work_item_with_overrides(
+                &work_item_id,
+                provider,
+                ExecutionOverrides {
+                    objective: Some(intent.objective),
+                    acceptance,
+                    dependencies: Some(intent.dependencies),
+                    ..ExecutionOverrides::default()
+                },
+                None,
+                |_| {},
+            )?;
+            let snapshot = service.snapshot();
+            Ok((
+                "run",
+                json!(control::run_view(&data_root, &snapshot, &run)?),
+            ))
+        }
+        ControlCommands::Resume {
+            run_id,
+            model,
+            effort,
+        } => {
+            let mut service = execution_service()?;
+            let snapshot = service.snapshot();
+            let prior_run = snapshot
+                .runs
+                .iter()
+                .find(|run| run.id == run_id)
+                .cloned()
+                .with_context(|| format!("run {run_id} was not found"))?;
+            if prior_run.status == crate::execution::LocalRunStatus::AwaitingDecision {
+                bail!(
+                    "run {run_id} is awaiting a human decision; approve or reject it before resuming"
+                )
+            }
+            let prior_item = snapshot
+                .work_items
+                .iter()
+                .find(|item| item.id == prior_run.work_item_id)
+                .cloned()
+                .context("run work item was not found")?;
+            let session = prior_run
+                .contract
+                .attempts
+                .iter()
+                .rev()
+                .find_map(|attempt| attempt.provider_session_id.clone())
+                .with_context(|| format!("run {run_id} has no resumable provider session"))?;
+            let intent = control::intent_for(&data_root, &prior_item)?;
+            let config = ProjectConfig::load(&prior_item.repository_root)
+                .context("project configuration unavailable")?;
+            let project = registered_project_for_root(&prior_item.repository_root, &config)?;
+            let work_item = service.create_work_item(CreateWorkItem {
+                project,
+                title: prior_item.title.clone(),
+                prompt: intent.objective.clone(),
+                declared_scope: prior_item.declared_scope.clone(),
+                baseline_ref: prior_item.target_branch.clone(),
+                target_branch: prior_item.target_branch.clone(),
+            })?;
+            control::record_work_item_intent(
+                &data_root,
+                work_item.id,
+                intent.objective.clone(),
+                intent.acceptance.clone(),
+                intent.dependencies.clone(),
+            )?;
+            let snapshot = service.snapshot();
+            let created = snapshot
+                .work_items
+                .iter()
+                .find(|item| item.id == work_item.id)
+                .cloned()
+                .context("resumed work item was not persisted")?;
+            control::ensure_ready(&data_root, &snapshot, &created)?;
+            let run = service.run_work_item_with_overrides(
+                &created.id,
+                prior_run.provider,
+                ExecutionOverrides {
+                    model,
+                    effort,
+                    resume_session: Some(session),
+                    objective: Some(intent.objective),
+                    acceptance: (!intent.acceptance.is_empty()).then_some(intent.acceptance),
+                    dependencies: Some(intent.dependencies),
+                },
+                None,
+                |_| {},
+            )?;
+            let snapshot = service.snapshot();
+            Ok((
+                "run",
+                json!(control::run_view(&data_root, &snapshot, &run)?),
+            ))
+        }
+        ControlCommands::Status { id } => {
+            let snapshot = execution_service()?.snapshot();
+            if let Some(run) = snapshot.runs.iter().find(|run| run.id == id) {
+                Ok(("run", json!(control::run_view(&data_root, &snapshot, run)?)))
+            } else if let Some(item) = snapshot.work_items.iter().find(|item| item.id == id) {
+                Ok((
+                    "work_item",
+                    json!(control::work_item_view(&data_root, &snapshot, item)?),
+                ))
+            } else {
+                bail!("no work item or run {id} was found")
+            }
+        }
+        ControlCommands::Approve { run_id, reason } => {
+            let mut service = execution_service()?;
+            let run = service.decide(
+                run_id,
+                DecisionRequest::Approve {
+                    actor: "agent-loop-control".into(),
+                    reason,
+                },
+            )?;
+            let snapshot = service.snapshot();
+            Ok((
+                "run",
+                json!(control::run_view(&data_root, &snapshot, &run)?),
+            ))
+        }
+        ControlCommands::Reject { run_id, reason } => {
+            let mut service = execution_service()?;
+            let run = service.decide(
+                run_id,
+                DecisionRequest::Reject {
+                    actor: "agent-loop-control".into(),
+                    reason,
+                },
+            )?;
+            let snapshot = service.snapshot();
+            Ok((
+                "run",
+                json!(control::run_view(&data_root, &snapshot, &run)?),
+            ))
+        }
+    }
+}
+
+fn emit_control(result: Result<(&'static str, Value)>) {
+    match result {
+        Ok((kind, data)) => println!(
+            "{}",
+            serde_json::to_string(&json!({
+                "schemaVersion": 1,
+                "ok": true,
+                "kind": kind,
+                "data": data,
+            }))
+            .expect("serialize control response")
+        ),
+        Err(error) => println!(
+            "{}",
+            serde_json::to_string(&json!({
+                "schemaVersion": 1,
+                "ok": false,
+                "error": {
+                    "code": control_error_code(&error),
+                    "message": format!("{error:#}"),
+                }
+            }))
+            .expect("serialize control error")
+        ),
+    }
+}
+
+fn control_error_code(error: &anyhow::Error) -> &'static str {
+    let message = format!("{error:#}").to_lowercase();
+    if message.contains("dependency-blocked") {
+        "dependency_blocked"
+    } else if message.contains("awaiting a human decision")
+        || message.contains("awaiting a decision")
+    {
+        "awaiting_decision"
+    } else if message.contains("was not found") || message.contains("no work item or run") {
+        "not_found"
+    } else if message.contains("project configuration unavailable")
+        || message.contains("config.toml")
+    {
+        "missing_project_config"
+    } else if message.contains("provider")
+        && (message.contains("unavailable") || message.contains("not ready"))
+    {
+        "provider_unavailable"
+    } else if message.contains("coding-tooling")
+        || message.contains("deterministic checks did not pass")
+    {
+        "tooling_unavailable_or_failed"
+    } else if message.contains("not open")
+        || message.contains("acceptance must")
+        || message.contains("scope")
+    {
+        "invalid_task"
+    } else if message.contains("another local run is active") {
+        "conflict"
+    } else {
+        "control_error"
+    }
 }
 
 fn execution_service() -> Result<ExecutionService> {
