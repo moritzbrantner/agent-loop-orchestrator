@@ -1101,18 +1101,21 @@ fn required_acceptance_is_satisfied(
     acceptance: &[AcceptanceCriterion],
     checks: &[CheckResult],
 ) -> bool {
-    acceptance.iter().filter(|criterion| criterion.required).all(|criterion| {
-        checks.iter().any(|check| {
-            check.required
-                && check.outcome == CheckOutcome::Passed
-                && check.check_id == criterion.id
-                && check.capability == criterion.capability
-                && criterion
-                    .component
-                    .as_ref()
-                    .is_none_or(|component| check.component.as_ref() == Some(component))
+    acceptance
+        .iter()
+        .filter(|criterion| criterion.required)
+        .all(|criterion| {
+            checks.iter().any(|check| {
+                check.required
+                    && check.outcome == CheckOutcome::Passed
+                    && check.check_id == criterion.id
+                    && check.capability == criterion.capability
+                    && criterion
+                        .component
+                        .as_ref()
+                        .is_none_or(|component| check.component.as_ref() == Some(component))
+            })
         })
-    })
 }
 
 fn write_contract_artifacts(run: &LocalRun, packet: &TaskPacket, directory: &Path) -> Result<()> {
