@@ -551,9 +551,9 @@ fn run_control(command: ControlCommands) -> Result<(&'static str, Value)> {
             control::record_work_item_intent(
                 &data_root,
                 work_item.id,
-                intent.objective,
-                intent.acceptance,
-                intent.dependencies,
+                intent.objective.clone(),
+                intent.acceptance.clone(),
+                intent.dependencies.clone(),
             )?;
             let snapshot = service.snapshot();
             let created = snapshot
