@@ -6,16 +6,13 @@ use std::{fmt, path::Path, str::FromStr};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    config::ProjectConfig,
-    contracts::TaskPacket,
-    process::CommandSpec,
-};
+use crate::{config::ProjectConfig, contracts::TaskPacket, process::CommandSpec};
 
 pub use claude::ClaudeAdapter;
 pub use codex::CodexAdapter;
 
-const TASK_PACKET_PROMPT_PREFIX: &str = "Implement the work described by this canonical agent.task-packet/v1. Leave the worktree clean and commit the completed candidate. You have no authority to integrate, push, publish, or otherwise mutate a remote system.\n\n";
+const TASK_PACKET_PROMPT_PREFIX: &str =
+    "Implement the work described by this canonical agent.task-packet/v1. Leave the worktree clean and commit the completed candidate. You have no authority to integrate, push, publish, or otherwise mutate a remote system.\n\n";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -119,7 +116,11 @@ The canonical task packet is retained by the orchestrator as interchange provena
     );
 
     output.push_str("Objective:\n");
-    append_list(&mut output, &packet.behavioral_scope, "the bounded requested change");
+    append_list(
+        &mut output,
+        &packet.behavioral_scope,
+        "the bounded requested change",
+    );
 
     output.push_str("\nCaller references:\n");
     output.push_str(&format!("- work item: {}\n", packet.work_item_id));
@@ -127,7 +128,10 @@ The canonical task packet is retained by the orchestrator as interchange provena
     output.push_str(&format!("- stage: {}\n", packet.stage));
 
     output.push_str("\nHard boundaries supplied by the caller:\n");
-    output.push_str(&format!("- exact baseline Git SHA: {}\n", packet.baseline.git_sha));
+    output.push_str(&format!(
+        "- exact baseline Git SHA: {}\n",
+        packet.baseline.git_sha
+    ));
     output.push_str("- mutable/write scope:\n");
     append_indented_list(&mut output, &packet.write_scope, "(none declared)");
     if !packet.protected_behavior.is_empty() {
@@ -140,11 +144,19 @@ The canonical task packet is retained by the orchestrator as interchange provena
     }
     output.push_str(&format!(
         "- integration authority: {}\n",
-        if packet.authority.may_integrate { "granted" } else { "not granted" }
+        if packet.authority.may_integrate {
+            "granted"
+        } else {
+            "not granted"
+        }
     ));
     output.push_str(&format!(
         "- publication authority: {}\n",
-        if packet.authority.may_publish { "granted" } else { "not granted" }
+        if packet.authority.may_publish {
+            "granted"
+        } else {
+            "not granted"
+        }
     ));
 
     output.push_str("\nAcceptance evidence requested by the caller:\n");
@@ -152,7 +164,11 @@ The canonical task packet is retained by the orchestrator as interchange provena
         output.push_str("- no additional structured acceptance criteria\n");
     } else {
         for criterion in &packet.acceptance {
-            let requirement = if criterion.required { "required" } else { "optional" };
+            let requirement = if criterion.required {
+                "required"
+            } else {
+                "optional"
+            };
             let component = criterion
                 .component
                 .as_deref()
@@ -216,7 +232,9 @@ mod tests {
             convention_refs: vec!["repository-default".into()],
             stage: "implementation".into(),
             target_surfaces: vec!["src".into(), "tests".into()],
-            behavioral_scope: vec!["Add the health endpoint without changing existing API behavior".into()],
+            behavioral_scope: vec![
+                "Add the health endpoint without changing existing API behavior".into(),
+            ],
             write_scope: vec!["src".into(), "tests".into()],
             protected_behavior: vec!["existing API behavior".into()],
             excluded_capabilities: vec!["remote-publication".into()],
@@ -276,6 +294,10 @@ mod tests {
         assert!(adapted.contains("integration authority: not granted"));
         assert!(adapted.contains("do not integrate, push, publish, schedule other work"));
         assert!(!adapted.contains("\"schemaVersion\""));
-        assert!(!adapted.contains("Implement the work described by this canonical agent.task-packet/v1"));
+        assert!(
+            !adapted.contains(
+                "Implement the work described by this canonical agent.task-packet/v1"
+            )
+        );
     }
 }
