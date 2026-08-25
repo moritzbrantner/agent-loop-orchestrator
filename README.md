@@ -23,14 +23,17 @@ The orchestrator should know **that** evidence and evaluations exist, but should
 
 Start with a direct run or independently invokable procedure when one agent can safely own the requested change and repository-owned checks can establish completion.
 
-Escalate to this orchestrator when the workload benefits from one or more of:
+The current runtime earns its additional ceremony when the workload benefits from one or more of:
 
-- durable decomposition or resumability;
-- explicit dependencies between work items;
-- multiple workers or isolated attempts that need coordinated ownership;
-- scheduling or retry state;
-- immutable candidate identity and explicit approve/reject decisions;
-- coordinated local integration across multiple pieces of work.
+- durable work-item/run state or resumability;
+- explicit readiness dependencies between work items;
+- one isolated provider attempt with bounded authority and retained output;
+- immutable candidate identity plus explicit approve/reject decisions;
+- exact-candidate local integration when the target branch still matches the candidate's bound baseline.
+
+Dependency metadata currently gates readiness but does not refresh a dependent work item's frozen baseline after an earlier item integrates. Create or resume downstream work against the current baseline rather than assuming a pre-created chain will be automatically rebased and integrated.
+
+Scheduling, automatic retries, parallel workers, and coordinated integration of a pre-created dependent chain are sensible **future** reasons to escalate to an orchestrator, but the implemented slice does not provide them yet. Do not select the current runtime solely because a workload requires those capabilities.
 
 Do not create a work item merely to invoke a reusable skill or to make a small sequential code change. The surrounding coding-agent landscape follows a progressive model: direct run → reusable procedures → iterative loop → work items → orchestration.
 
