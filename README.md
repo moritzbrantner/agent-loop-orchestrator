@@ -1,8 +1,10 @@
 # Agent Loop Orchestrator
 
-A single-user localhost control plane for creating, executing, checking, deciding, and locally integrating coding-agent work.
+An optional single-user localhost coordination layer for coding-agent workloads that need durable work items, isolated execution, run state, candidate decisions, or local integration.
 
-The orchestrator is the local system of record that connects the rest of the coding-agent landscape without absorbing their responsibilities:
+Direct human-to-agent work, standalone skills, deterministic tooling, and lightweight iterative loops do **not** require this repository, `agent-loop init`, or orchestrator registration. The orchestrator is an escalation layer: use it when coordination complexity justifies durable control state.
+
+When selected, the orchestrator is the local system of record that connects the rest of the coding-agent landscape without absorbing their responsibilities:
 
 | Component | Responsibility |
 | --- | --- |
@@ -11,11 +13,29 @@ The orchestrator is the local system of record that connects the rest of the cod
 | `coding-tooling` | Deterministic repository discovery, affected-scope analysis, and checks |
 | `runtime-profiler` | Reproducible runtime evidence capture and immutable evidence bundles |
 | `agent-loop-setup` | Reusable worker procedures and environment-specific installation composition |
-| `agent-loop-orchestrator` | Repository bootstrap, work items, isolated execution, run state, authority, evidence references, decisions, and local integration |
+| `agent-loop-orchestrator` | Optional repository bootstrap, work items, isolated execution, run state, authority, evidence references, decisions, and local integration |
 | `moonlight` | Baseline/candidate comparison and evaluation |
 | `local-refactor` | A specialized refactoring worker |
 
 The orchestrator should know **that** evidence and evaluations exist, but should not need to understand profiler metrics, Moonlight comparison internals, or repository-specific check formats. Those boundaries are represented by `agent-contracts`.
+
+## When to use the orchestrator
+
+Start with a direct run or independently invokable procedure when one agent can safely own the requested change and repository-owned checks can establish completion.
+
+The current runtime earns its additional ceremony when the workload benefits from one or more of:
+
+- durable work-item/run state or resumability;
+- explicit readiness dependencies between work items;
+- one isolated provider attempt with bounded authority and retained output;
+- immutable candidate identity plus explicit approve/reject decisions;
+- exact-candidate local integration when the target branch still matches the candidate's bound baseline.
+
+Dependency metadata currently gates readiness but does not refresh a dependent work item's frozen baseline after an earlier item integrates. Create or resume downstream work against the current baseline rather than assuming a pre-created chain will be automatically rebased and integrated.
+
+Scheduling, automatic retries, parallel workers, and coordinated integration of a pre-created dependent chain are sensible **future** reasons to escalate to an orchestrator, but the implemented slice does not provide them yet. Do not select the current runtime solely because a workload requires those capabilities.
+
+Do not create a work item merely to invoke a reusable skill or to make a small sequential code change. The surrounding coding-agent landscape follows a progressive model: direct run → reusable procedures → iterative loop → work items → orchestration.
 
 ## Install once
 
@@ -36,16 +56,16 @@ codex login
 claude
 ```
 
-## Add a repository
+## Opt a repository into orchestrated mode
 
-From any Git repository:
+From a Git repository that needs orchestrated execution:
 
 ```bash
 agent-loop init
 agent-loop doctor
 ```
 
-`init` creates the versioned `.agent-loop/config.toml`, ignores local run evidence, and registers the repository in the per-user orchestrator registry. It does not overwrite an existing configuration unless you pass `--force`.
+`init` creates the versioned `.agent-loop/config.toml`, ignores local run evidence, and registers the repository in the per-user orchestrator registry. It does not overwrite an existing configuration unless you pass `--force`. Repositories using only direct agents, standalone procedures, or lightweight loops do not need this step.
 
 Create a bounded work item, start it, inspect the candidate, then approve or reject it:
 
@@ -57,7 +77,7 @@ agent-loop approve <run-id>
 # or: agent-loop reject <run-id> --reason "Not the intended behavior"
 ```
 
-`agent-loop run --prompt "..."` is the one-command shorthand for creating and starting a whole-repository work item. It still stops at `awaiting_decision`; integration always requires an explicit approval.
+`agent-loop run --prompt "..."` is the one-command shorthand **inside orchestrated mode** for creating and starting a whole-repository work item. It still stops at `awaiting_decision`; integration always requires an explicit approval. A truly direct external coding-agent invocation can bypass the orchestrator entirely.
 
 Execution settings are repository-local and backwards-compatible with existing v1 config files:
 
@@ -72,7 +92,7 @@ See [Claude and Codex adapters](docs/providers.md) for command mappings, permiss
 
 ## Stable control surface for skills
 
-`agent-loop control` is the machine-readable integration boundary for thin `agent-loop-setup` skills and local automation. Consumers should not parse the orchestrator's runtime files or database layout.
+`agent-loop control` is the machine-readable integration boundary for `agent-loop-setup` skills and local automation **that opt into orchestrated mode**. Independently invoked skills must not need to parse this interface merely to run. Consumers participating in orchestration should not parse the orchestrator's runtime files or database layout.
 
 Create bounded intent with explicit objective, acceptance criteria, dependencies, and scope:
 
@@ -129,9 +149,11 @@ For frontend development, run `bun run dev` from `web/` while the Rust service i
 
 ## Interchange contracts
 
-[`moritzbrantner/agent-contracts`](https://github.com/moritzbrantner/agent-contracts) owns all interchange semantics. This orchestrator pins revision `cf0d0c15a743cbf5358f4f3bdd83f38b6371cd98` and emits `agent.run/v1`, with its `agent.authority/v1`, `agent.task-packet/v1`, `agent.candidate/v1`, `agent.check-result/v1`, and `agent.component-lock/v1` records. The local [checksum-verified snapshot](contracts/agent-contracts/PROVENANCE.json) exists only so conformance tests run offline; it is not a fork or a normative schema source.
+[`moritzbrantner/agent-contracts`](https://github.com/moritzbrantner/agent-contracts) owns all interchange semantics used by this orchestrated boundary. This orchestrator pins revision `cf0d0c15a743cbf5358f4f3bdd83f38b6371cd98` and emits `agent.run/v1`, with its `agent.authority/v1`, `agent.task-packet/v1`, `agent.candidate/v1`, `agent.check-result/v1`, and `agent.component-lock/v1` records. The local [checksum-verified snapshot](contracts/agent-contracts/PROVENANCE.json) exists only so conformance tests run offline; it is not a fork or a normative schema source.
 
-Neutral `agent.evidence/v1` references represent runtime, check, trace, or other artifacts, while `agent.evaluation-result/v1` represents evaluator outcomes such as future Moonlight results. The orchestrator owns lifecycle and state; it does not own the internal formats or logic of those producers. Provider-specific commands and UI payloads are local implementation details, not replacement contract models.
+These contracts do not imply that every direct/local coding-agent invocation must first become an orchestrator work item. They apply when independently owned components exchange state through this orchestration boundary.
+
+Neutral `agent.evidence/v1` references represent runtime, check, trace, or other artifacts, while `agent.evaluation-result/v1` represents evaluator outcomes such as future Moonlight results. The orchestrator owns lifecycle and state for runs it coordinates; it does not own the internal formats or logic of those producers. Provider-specific commands and UI payloads are local implementation details, not replacement contract models.
 
 ## Implemented local execution slice
 
@@ -147,6 +169,6 @@ This slice never pushes, opens a pull request, publishes remotely, invokes Moonl
 
 ## Boundary
 
-The orchestrator owns coordination and durable run state. It does not own coding conventions, discover or invent repository checks, capture profiler-specific measurements, decide semantic equivalence itself, or embed Moonlight or specialist implementation logic. It decides when future collectors and evaluators run, not how they normalize measurements or classify differences.
+When selected, the orchestrator owns coordination and durable run state. It does not own coding conventions, discover or invent repository checks, capture profiler-specific measurements, decide semantic equivalence itself, or embed Moonlight or specialist implementation logic. It decides when future collectors and evaluators run, not how they normalize measurements or classify differences.
 
-Contract evolution happens in `agent-contracts`; this repository updates its pin deliberately and validates emitted records against that exact revision.
+Outside orchestrated mode, those lower-level components and agent procedures remain independently usable. Contract evolution happens in `agent-contracts`; this repository updates its pin deliberately and validates emitted records against that exact revision.
