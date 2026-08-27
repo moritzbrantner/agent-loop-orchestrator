@@ -40,13 +40,6 @@ pub struct ComponentDiagnostic {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-pub struct ResolvedCommand {
-    pub program: OsString,
-    pub prefix_args: Vec<OsString>,
-    pub source: String,
-}
-
 pub fn default_registry_path() -> Result<PathBuf> {
     let root = if let Some(root) = env::var_os("XDG_CONFIG_HOME") {
         PathBuf::from(root)
@@ -123,6 +116,15 @@ pub fn diagnose_registry(
                 ready: false,
                 error: Some("registered component path does not exist".into()),
             },
+            Some(component) if *name == "coding-tooling" && !coding_tooling_cli(component).is_file() => {
+                ComponentDiagnostic {
+                    name: (*name).into(),
+                    path: Some(component.path.clone()),
+                    observed_revision: Some(component.observed_revision.clone()),
+                    ready: false,
+                    error: Some("registered coding-tooling checkout has no src/cli.ts".into()),
+                }
+            }
             Some(component) => ComponentDiagnostic {
                 name: (*name).into(),
                 path: Some(component.path.clone()),
@@ -134,61 +136,77 @@ pub fn diagnose_registry(
         .collect()
 }
 
-pub fn resolve_coding_tooling(configured: &str) -> Result<ResolvedCommand> {
-    if configured != "coding-tooling" {
-        return Ok(ResolvedCommand {
-            program: configured.into(),
-            prefix_args: Vec::new(),
-            source: "repository configuration".into(),
-        });
+/// Make machine-registered deterministic tools available to the existing execution adapters.
+///
+/// The orchestrator still honors an already installed `coding-tooling` executable. When it is
+/// absent, this creates a process-local runtime shim pointing at the exact registered source
+/// checkout and prepends only that shim directory to PATH. The registry remains the source of
+/// discovery; no tool code is copied or vendored into a target repository.
+pub fn activate_registered_tools() -> Result<()> {
+    if find_on_path(OsStr::new("coding-tooling")).is_some() {
+        return Ok(());
     }
-
-    if let Some(executable) = find_on_path(OsStr::new("coding-tooling")) {
-        return Ok(ResolvedCommand {
-            program: executable.into_os_string(),
-            prefix_args: Vec::new(),
-            source: "PATH".into(),
-        });
-    }
-
-    let registry_path = default_registry_path()?;
-    let registry = load_default()?.with_context(|| {
-        format!(
-            "coding-tooling is not on PATH and machine environment registry {} is missing; run agent-loop-setup/bin/setup-environment",
-            registry_path.display()
-        )
-    })?;
-    let component = registry.components.get("coding-tooling").with_context(|| {
-        format!(
-            "coding-tooling is not on PATH and is not registered in {}",
-            registry_path.display()
-        )
-    })?;
-    registered_coding_tooling_command(component, find_on_path(OsStr::new("bun"))).with_context(|| {
-        format!(
-            "resolve registered coding-tooling from {}",
+    let Some(registry) = load_default()? else {
+        return Ok(());
+    };
+    let Some(component) = registry.components.get("coding-tooling") else {
+        return Ok(());
+    };
+    let cli = coding_tooling_cli(component);
+    if !cli.is_file() {
+        bail!(
+            "registered coding-tooling checkout {} has no src/cli.ts",
             component.path.display()
-        )
-    })
+        );
+    }
+    if find_on_path(OsStr::new("bun")).is_none() {
+        bail!("Bun is required to run the registered coding-tooling source checkout");
+    }
+    activate_executable_shim("coding-tooling", &cli)
 }
 
-fn registered_coding_tooling_command(
-    component: &EnvironmentComponent,
-    bun: Option<PathBuf>,
-) -> Result<ResolvedCommand> {
-    if !component.path.is_dir() {
-        bail!("registered coding-tooling path does not exist");
+fn coding_tooling_cli(component: &EnvironmentComponent) -> PathBuf {
+    component.path.join("src").join("cli.ts")
+}
+
+#[cfg(unix)]
+fn activate_executable_shim(name: &str, target: &Path) -> Result<()> {
+    use std::os::unix::fs::symlink;
+
+    let data_root = dirs::data_local_dir().context("determine local data directory")?;
+    let bin = data_root
+        .join("agent-loop-orchestrator")
+        .join("runtime-bin");
+    fs::create_dir_all(&bin)?;
+    let shim = bin.join(name);
+    if shim.exists() || shim.symlink_metadata().is_ok() {
+        let current = fs::read_link(&shim).ok();
+        if current.as_deref() != Some(target) {
+            fs::remove_file(&shim)
+                .with_context(|| format!("replace runtime shim {}", shim.display()))?;
+        }
     }
-    let cli = component.path.join("src").join("cli.ts");
-    if !cli.is_file() {
-        bail!("registered coding-tooling checkout has no src/cli.ts");
+    if !shim.exists() {
+        symlink(target, &shim).with_context(|| {
+            format!(
+                "create runtime shim {} -> {}",
+                shim.display(),
+                target.display()
+            )
+        })?;
     }
-    let bun = bun.context("Bun is required to run coding-tooling from its registered source checkout")?;
-    Ok(ResolvedCommand {
-        program: bun.into_os_string(),
-        prefix_args: vec![cli.into_os_string()],
-        source: "machine environment registry".into(),
-    })
+
+    let existing = env::var_os("PATH").unwrap_or_default();
+    let joined = env::join_paths(std::iter::once(bin).chain(env::split_paths(&existing)))
+        .context("construct process PATH for registered tools")?;
+    // SAFETY: this runs synchronously at process startup before the CLI creates worker threads.
+    unsafe { env::set_var("PATH", joined) };
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn activate_executable_shim(_name: &str, _target: &Path) -> Result<()> {
+    Ok(())
 }
 
 pub fn find_on_path(executable: &OsStr) -> Option<PathBuf> {
@@ -228,8 +246,10 @@ mod tests {
         let root = tempdir().unwrap();
         let conventions = root.path().join("coding-agent-conventions");
         let tooling = root.path().join("coding-tooling");
+        let tooling_src = tooling.join("src");
         fs::create_dir(&conventions).unwrap();
-        fs::create_dir(&tooling).unwrap();
+        fs::create_dir_all(&tooling_src).unwrap();
+        fs::write(tooling_src.join("cli.ts"), "#!/usr/bin/env bun\n").unwrap();
         let registry = EnvironmentRegistry {
             schema_version: 1,
             components: BTreeMap::from([
@@ -251,28 +271,20 @@ mod tests {
         };
 
         let diagnostics = diagnose_registry(&registry, CORE_COMPONENTS);
-        assert!(diagnostics.iter().any(|item| item.name == "coding-agent-conventions" && item.ready));
-        assert!(diagnostics.iter().any(|item| item.name == "coding-tooling" && item.ready));
-        assert!(diagnostics.iter().any(|item| item.name == "coding-agent-skills" && !item.ready));
-    }
-
-    #[test]
-    fn builds_source_checkout_command_for_registered_coding_tooling() {
-        let root = tempdir().unwrap();
-        let tooling = root.path().join("coding-tooling");
-        let src = tooling.join("src");
-        fs::create_dir_all(&src).unwrap();
-        fs::write(src.join("cli.ts"), "console.log('ok');\n").unwrap();
-        let bun = root.path().join("bun");
-        fs::write(&bun, "").unwrap();
-        let component = EnvironmentComponent {
-            path: tooling.clone(),
-            observed_revision: "abc".into(),
-        };
-
-        let command = registered_coding_tooling_command(&component, Some(bun.clone())).unwrap();
-        assert_eq!(command.program, bun.into_os_string());
-        assert_eq!(command.prefix_args, vec![tooling.join("src/cli.ts").into_os_string()]);
-        assert_eq!(command.source, "machine environment registry");
+        assert!(
+            diagnostics
+                .iter()
+                .any(|item| item.name == "coding-agent-conventions" && item.ready)
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|item| item.name == "coding-tooling" && item.ready)
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|item| item.name == "coding-agent-skills" && !item.ready)
+        );
     }
 }
