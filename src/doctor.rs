@@ -1,4 +1,8 @@
-use std::{ffi::OsStr, path::PathBuf, process::Command};
+use std::{
+    ffi::OsStr,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use anyhow::{Result, bail};
 use serde::Serialize;
@@ -22,9 +26,9 @@ pub struct Diagnostic {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DoctorReport {
-    components: Vec<ComponentDiagnostic>,
-    providers: Vec<Diagnostic>,
+struct DoctorReport<'a> {
+    components: &'a [ComponentDiagnostic],
+    providers: &'a [Diagnostic],
 }
 
 pub fn run(config: Option<&ProjectConfig>, requested: Option<Provider>, json: bool) -> Result<()> {
@@ -41,8 +45,8 @@ pub fn run(config: Option<&ProjectConfig>, requested: Option<Provider>, json: bo
         println!(
             "{}",
             serde_json::to_string_pretty(&DoctorReport {
-                components: components.clone(),
-                providers: diagnostics,
+                components: &components,
+                providers: &diagnostics,
             })?
         );
     } else {
@@ -129,7 +133,7 @@ fn diagnose(config: Option<&ProjectConfig>, provider: Provider) -> Diagnostic {
     }
 }
 
-fn command_text(executable: &PathBuf, args: &[&str]) -> std::result::Result<String, String> {
+fn command_text(executable: &Path, args: &[&str]) -> std::result::Result<String, String> {
     let output = Command::new(executable)
         .args(args)
         .output()
@@ -140,6 +144,6 @@ fn command_text(executable: &PathBuf, args: &[&str]) -> std::result::Result<Stri
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
-fn command_success(executable: &PathBuf, args: &[&str]) -> std::result::Result<(), String> {
+fn command_success(executable: &Path, args: &[&str]) -> std::result::Result<(), String> {
     command_text(executable, args).map(|_| ())
 }
