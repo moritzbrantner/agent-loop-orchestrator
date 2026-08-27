@@ -13,9 +13,9 @@ use tempfile::TempDir;
 const PROVIDER: &str = r#"#!/bin/sh
 set -eu
 case "$*" in
-  *'"id": "tests"'*'"capability": "test"'*) ;;
+  *'Add greeting.txt'*'tests: test'*) ;;
   *)
-    printf 'task packet did not contain the stored acceptance criterion\n' >&2
+    printf 'worker context did not contain the stored objective and acceptance criterion\n' >&2
     exit 3
     ;;
 esac
