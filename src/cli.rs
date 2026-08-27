@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::{
     adapters::Provider,
-    config::ProjectConfig,
+    config::{ProjectConfig, SkillProfile, SkillsConfig},
     control,
     execution::{CreateWorkItem, DecisionRequest, ExecutionOverrides, ExecutionService},
     repository::{self, RegisteredProject, find_repository_root},
@@ -29,6 +29,12 @@ enum Commands {
         repository: PathBuf,
         #[arg(long, default_value = "codex")]
         provider: String,
+        /// Skill profile used for automatic capability selection.
+        #[arg(long, default_value = "standard")]
+        profile: String,
+        /// Explicit capability ID for the custom profile. Repeat to allow multiple capabilities.
+        #[arg(long = "capability")]
+        capabilities: Vec<String>,
         #[arg(long)]
         force: bool,
     },
@@ -211,10 +217,14 @@ pub fn run() -> Result<()> {
         Commands::Init {
             repository,
             provider,
+            profile,
+            capabilities,
             force,
         } => {
             let provider = Provider::from_str(&provider)?;
-            let path = repository::init(&repository, provider, force)?;
+            let profile = SkillProfile::from_str(&profile)?;
+            let skills = SkillsConfig::for_profile(profile, capabilities)?;
+            let path = repository::init_with_skills(&repository, provider, skills, force)?;
             println!("Initialized {}", path.display());
             println!("Next: agent-loop doctor && agent-loop run --prompt \"your task\"");
         }
