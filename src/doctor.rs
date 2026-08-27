@@ -1,14 +1,13 @@
-use std::{
-    env,
-    ffi::OsString,
-    path::{Path, PathBuf},
-    process::Command,
-};
+use std::{ffi::OsStr, path::PathBuf, process::Command};
 
 use anyhow::{Result, bail};
 use serde::Serialize;
 
-use crate::{adapters::Provider, config::ProjectConfig};
+use crate::{
+    adapters::Provider,
+    config::ProjectConfig,
+    environment::{self, ComponentDiagnostic, CORE_COMPONENTS},
+};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -21,7 +20,15 @@ pub struct Diagnostic {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DoctorReport {
+    components: Vec<ComponentDiagnostic>,
+    providers: Vec<Diagnostic>,
+}
+
 pub fn run(config: Option<&ProjectConfig>, requested: Option<Provider>, json: bool) -> Result<()> {
+    let components = environment::diagnose_required_components(CORE_COMPONENTS)?;
     let providers: Vec<Provider> = requested
         .map(|provider| vec![provider])
         .unwrap_or_else(|| vec![Provider::Claude, Provider::Codex]);
@@ -31,28 +38,55 @@ pub fn run(config: Option<&ProjectConfig>, requested: Option<Provider>, json: bo
         .collect();
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&diagnostics)?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&DoctorReport {
+                components: components.clone(),
+                providers: diagnostics,
+            })?
+        );
     } else {
+        println!("Machine components:");
+        for component in &components {
+            let state = if component.ready { "ready" } else { "not ready" };
+            println!("  {}: {state}", component.name);
+            if let Some(path) = &component.path {
+                println!("    path: {}", path.display());
+            }
+            if let Some(revision) = &component.observed_revision {
+                println!("    registered revision: {revision}");
+            }
+            if let Some(error) = &component.error {
+                println!("    issue: {error}");
+            }
+        }
+
+        println!("Providers:");
         for diagnostic in &diagnostics {
             let state = if diagnostic.authenticated {
                 "ready"
             } else {
                 "not ready"
             };
-            println!("{}: {state}", diagnostic.provider);
-            println!("  executable: {}", diagnostic.executable);
+            println!("  {}: {state}", diagnostic.provider);
+            println!("    executable: {}", diagnostic.executable);
             if let Some(path) = &diagnostic.found_at {
-                println!("  path: {}", path.display());
+                println!("    path: {}", path.display());
             }
             if let Some(version) = &diagnostic.version {
-                println!("  version: {version}");
+                println!("    version: {version}");
             }
             if let Some(error) = &diagnostic.error {
-                println!("  issue: {error}");
+                println!("    issue: {error}");
             }
         }
     }
 
+    if components.iter().any(|component| !component.ready) {
+        bail!(
+            "machine environment is not ready; register coding-agent-conventions, coding-agent-skills, and coding-tooling with agent-loop-setup/bin/setup-environment"
+        );
+    }
     if diagnostics
         .iter()
         .any(|diagnostic| !diagnostic.authenticated)
@@ -69,7 +103,7 @@ fn diagnose(config: Option<&ProjectConfig>, provider: Provider) -> Diagnostic {
         (None, Provider::Claude) => "claude".into(),
         (None, Provider::Codex) => "codex".into(),
     };
-    let Some(found_at) = find_on_path(&executable) else {
+    let Some(found_at) = environment::find_on_path(OsStr::new(&executable)) else {
         return Diagnostic {
             provider,
             executable,
@@ -95,33 +129,7 @@ fn diagnose(config: Option<&ProjectConfig>, provider: Provider) -> Diagnostic {
     }
 }
 
-fn find_on_path(executable: &str) -> Option<PathBuf> {
-    let candidate = Path::new(executable);
-    if candidate.components().count() > 1 {
-        return candidate.is_file().then(|| candidate.to_owned());
-    }
-    env::split_paths(&env::var_os("PATH")?).find_map(|directory| {
-        executable_candidates(&directory, executable)
-            .into_iter()
-            .find(|path| path.is_file())
-    })
-}
-
-fn executable_candidates(directory: &Path, executable: &str) -> Vec<PathBuf> {
-    let mut candidates = vec![directory.join(executable)];
-    if cfg!(windows) {
-        for extension in env::var_os("PATHEXT")
-            .unwrap_or_else(|| OsString::from(".EXE;.CMD;.BAT"))
-            .to_string_lossy()
-            .split(';')
-        {
-            candidates.push(directory.join(format!("{executable}{extension}")));
-        }
-    }
-    candidates
-}
-
-fn command_text(executable: &Path, args: &[&str]) -> std::result::Result<String, String> {
+fn command_text(executable: &PathBuf, args: &[&str]) -> std::result::Result<String, String> {
     let output = Command::new(executable)
         .args(args)
         .output()
@@ -132,6 +140,6 @@ fn command_text(executable: &Path, args: &[&str]) -> std::result::Result<String,
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
-fn command_success(executable: &Path, args: &[&str]) -> std::result::Result<(), String> {
+fn command_success(executable: &PathBuf, args: &[&str]) -> std::result::Result<(), String> {
     command_text(executable, args).map(|_| ())
 }
