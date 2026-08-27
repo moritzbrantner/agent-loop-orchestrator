@@ -1,4 +1,4 @@
-use std::{fs, path::Path};
+use std::{collections::HashSet, fs, path::Path, str::FromStr};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -14,6 +14,12 @@ pub struct ProjectConfig {
     pub providers: Providers,
     #[serde(default)]
     pub execution: ExecutionConfig,
+    #[serde(default)]
+    pub skills: SkillsConfig,
+    #[serde(default, skip_serializing_if = "KnowledgePaths::is_default")]
+    pub paths: KnowledgePaths,
+    #[serde(default, skip_serializing_if = "ReviewConfig::is_default")]
+    pub reviews: ReviewConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -31,6 +37,114 @@ impl Default for ExecutionConfig {
             check_tier: "fast".into(),
             target_branch: "main".into(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum SkillProfile {
+    Minimal,
+    #[default]
+    Standard,
+    Custom,
+}
+
+impl FromStr for SkillProfile {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value {
+            "minimal" => Ok(Self::Minimal),
+            "standard" => Ok(Self::Standard),
+            "custom" => Ok(Self::Custom),
+            other => {
+                bail!("unsupported skill profile `{other}`; expected minimal, standard, or custom")
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SkillsConfig {
+    #[serde(default)]
+    pub profile: SkillProfile,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
+}
+
+impl Default for SkillsConfig {
+    fn default() -> Self {
+        Self {
+            profile: SkillProfile::Standard,
+            capabilities: Vec::new(),
+        }
+    }
+}
+
+impl SkillsConfig {
+    pub fn for_profile(profile: SkillProfile, capabilities: Vec<String>) -> Result<Self> {
+        let config = Self {
+            profile,
+            capabilities,
+        };
+        config.validate()?;
+        Ok(config)
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.profile != SkillProfile::Custom && !self.capabilities.is_empty() {
+            bail!("skills.capabilities is only valid when skills.profile = \"custom\"");
+        }
+        let mut seen = HashSet::new();
+        for capability in &self.capabilities {
+            let Some((namespace, name)) = capability.split_once('/') else {
+                bail!("custom capability `{capability}` must use a namespaced stable ID");
+            };
+            if namespace.trim().is_empty()
+                || name.trim().is_empty()
+                || namespace.chars().any(char::is_whitespace)
+                || name.chars().any(char::is_whitespace)
+            {
+                bail!("custom capability `{capability}` must use a namespaced stable ID");
+            }
+            if !seen.insert(capability) {
+                bail!("custom capability `{capability}` is duplicated");
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct KnowledgePaths {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub specs: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adrs: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviews: Option<String>,
+}
+
+impl KnowledgePaths {
+    fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewConfig {
+    #[serde(default)]
+    pub persist: bool,
+}
+
+impl ReviewConfig {
+    fn is_default(&self) -> bool {
+        self == &Self::default()
     }
 }
 
@@ -130,6 +244,14 @@ impl ClaudePermissionMode {
 
 impl ProjectConfig {
     pub fn default_for(project_id: String, provider: Provider) -> Self {
+        Self::default_for_with_skills(project_id, provider, SkillsConfig::default())
+    }
+
+    pub fn default_for_with_skills(
+        project_id: String,
+        provider: Provider,
+        skills: SkillsConfig,
+    ) -> Self {
         Self {
             version: 1,
             project: Project { id: project_id },
@@ -143,15 +265,12 @@ impl ProjectConfig {
                     model: None,
                     reasoning_effort: Some("high".into()),
                     sandbox: CodexSandbox::WorkspaceWrite,
-                    // Headless processes cannot answer approval prompts. The workspace sandbox is
-                    // therefore the enforcement boundary for the default local run.
                     approval_policy: CodexApprovalPolicy::Never,
                 },
                 claude: ClaudeConfig {
                     executable: "claude".into(),
                     model: None,
                     effort: Some("high".into()),
-                    // dontAsk fails closed instead of hanging on an interactive prompt.
                     permission_mode: ClaudePermissionMode::DontAsk,
                     allowed_tools: vec![
                         "Bash".into(),
@@ -162,6 +281,9 @@ impl ProjectConfig {
                 },
             },
             execution: ExecutionConfig::default(),
+            skills,
+            paths: KnowledgePaths::default(),
+            reviews: ReviewConfig::default(),
         }
     }
 
@@ -200,8 +322,20 @@ impl ProjectConfig {
         if self.execution.target_branch.trim().is_empty() {
             bail!("execution.target_branch cannot be empty");
         }
+        self.skills.validate()?;
+        validate_optional_path("paths.specs", self.paths.specs.as_deref())?;
+        validate_optional_path("paths.domain", self.paths.domain.as_deref())?;
+        validate_optional_path("paths.adrs", self.paths.adrs.as_deref())?;
+        validate_optional_path("paths.reviews", self.paths.reviews.as_deref())?;
         Ok(())
     }
+}
+
+fn validate_optional_path(label: &str, value: Option<&str>) -> Result<()> {
+    if value.is_some_and(|value| value.trim().is_empty()) {
+        bail!("{label} cannot be empty when configured");
+    }
+    Ok(())
 }
 
 pub fn validate_codex_effort(value: Option<&str>) -> Result<()> {
@@ -234,6 +368,9 @@ mod tests {
         let encoded = config.to_toml().unwrap();
         let decoded: ProjectConfig = toml::from_str(&encoded).unwrap();
         assert_eq!(decoded, config);
+        assert_eq!(decoded.skills.profile, SkillProfile::Standard);
+        assert!(!encoded.contains("[paths]"));
+        assert!(!encoded.contains("[reviews]"));
     }
 
     #[test]
@@ -245,7 +382,7 @@ mod tests {
     }
 
     #[test]
-    fn pre_execution_slice_config_uses_safe_execution_defaults() {
+    fn pre_execution_slice_config_uses_safe_execution_defaults_and_standard_skills() {
         let encoded = r#"
 version = 1
 
@@ -268,5 +405,26 @@ allowed_tools = []
 "#;
         let config: ProjectConfig = toml::from_str(encoded).unwrap();
         assert_eq!(config.execution, ExecutionConfig::default());
+        assert_eq!(config.skills, SkillsConfig::default());
+    }
+
+    #[test]
+    fn custom_profile_owns_an_independent_explicit_allowlist() {
+        let skills = SkillsConfig::for_profile(
+            SkillProfile::Custom,
+            vec!["general/grilling".into(), "general/refactor".into()],
+        )
+        .unwrap();
+        let config = ProjectConfig::default_for_with_skills("demo".into(), Provider::Codex, skills);
+        let encoded = config.to_toml().unwrap();
+        assert!(encoded.contains("profile = \"custom\""));
+        assert!(encoded.contains("general/grilling"));
+    }
+
+    #[test]
+    fn named_profiles_reject_explicit_capability_lists() {
+        assert!(
+            SkillsConfig::for_profile(SkillProfile::Standard, vec!["general/tdd".into()]).is_err()
+        );
     }
 }

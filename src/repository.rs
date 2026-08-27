@@ -8,7 +8,10 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::{adapters::Provider, config::ProjectConfig};
+use crate::{
+    adapters::Provider,
+    config::{ProjectConfig, SkillsConfig},
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct Registry {
@@ -42,6 +45,15 @@ pub fn find_repository_root(start: &Path) -> Result<PathBuf> {
 }
 
 pub fn init(start: &Path, provider: Provider, force: bool) -> Result<PathBuf> {
+    init_with_skills(start, provider, SkillsConfig::default(), force)
+}
+
+pub fn init_with_skills(
+    start: &Path,
+    provider: Provider,
+    skills: SkillsConfig,
+    force: bool,
+) -> Result<PathBuf> {
     let repository_root = find_repository_root(start)?;
     let project_id = repository_root
         .file_name()
@@ -58,7 +70,8 @@ pub fn init(start: &Path, provider: Provider, force: bool) -> Result<PathBuf> {
     }
 
     fs::create_dir_all(&config_directory)?;
-    let config = ProjectConfig::default_for(project_id.clone(), provider);
+    let config = ProjectConfig::default_for_with_skills(project_id.clone(), provider, skills);
+    config.validate()?;
     fs::write(&config_path, config.to_toml()?)
         .with_context(|| format!("write {}", config_path.display()))?;
     update_gitignore(&repository_root)?;
