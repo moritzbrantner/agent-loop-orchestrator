@@ -12,6 +12,7 @@ pub use claude::ClaudeAdapter;
 pub use codex::CodexAdapter;
 
 const TASK_PACKET_PROMPT_PREFIX: &str = "Implement the work described by this canonical agent.task-packet/v1. Leave the worktree clean and commit the completed candidate. You have no authority to integrate, push, publish, or otherwise mutate a remote system.\n\n";
+const LIVE_CONVENTION_BOOTSTRAP: &str = "Before making repository changes, resolve the current shared engineering policy by running `coding-tooling conventions resolve --root . --json`. Read every path returned in `data.files` and all repository-local instruction files returned in `data.localInstructions`. Repository-local instructions are most specific; technology conventions override broader shared conventions only where they conflict. Do not copy shared policy into this repository. If convention resolution is unavailable or errors, report that environment/setup problem instead of silently substituting guessed preferences. When reproducibility evidence is reported, include the resolver's `sourceRevision`.";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -72,7 +73,7 @@ impl AgentAdapter for OrchestratedWorkerAdapter {
     }
 
     fn command(&self, config: &ProjectConfig, request: &RunRequest<'_>) -> Result<CommandSpec> {
-        let prompt = adapt_worker_prompt(request.prompt)?;
+        let prompt = prepare_worker_prompt(request.prompt)?;
         let adapted = RunRequest {
             repository_root: request.repository_root,
             prompt: &prompt,
@@ -96,6 +97,11 @@ impl AgentAdapter for OrchestratedWorkerAdapter {
 
 pub fn adapter(provider: Provider) -> Box<dyn AgentAdapter> {
     Box::new(OrchestratedWorkerAdapter { provider })
+}
+
+fn prepare_worker_prompt(prompt: &str) -> Result<String> {
+    let work = adapt_worker_prompt(prompt)?;
+    Ok(format!("{LIVE_CONVENTION_BOOTSTRAP}\n\n{work}"))
 }
 
 fn adapt_worker_prompt(prompt: &str) -> Result<String> {
@@ -125,6 +131,14 @@ The canonical task packet is retained by the orchestrator as interchange provena
     output.push_str(&format!("- work item: {}\n", packet.work_item_id));
     output.push_str(&format!("- delegated slice: {}\n", packet.slice_id));
     output.push_str(&format!("- stage: {}\n", packet.stage));
+    output.push_str(&format!(
+        "- primary convention selection: {}\n",
+        packet.primary_convention
+    ));
+    if !packet.convention_refs.is_empty() {
+        output.push_str("- convention references:\n");
+        append_indented_list(&mut output, &packet.convention_refs, "(none)");
+    }
 
     output.push_str("\nHard boundaries supplied by the caller:\n");
     output.push_str(&format!(
@@ -270,9 +284,17 @@ mod tests {
     }
 
     #[test]
-    fn direct_provider_prompt_passes_through_unchanged() {
+    fn direct_provider_prompt_passes_through_interchange_adaptation() {
         let prompt = "Fix the typo and run the focused test.";
         assert_eq!(adapt_worker_prompt(prompt).unwrap(), prompt);
+    }
+
+    #[test]
+    fn every_worker_prompt_bootstraps_live_shared_policy() {
+        let adapted = prepare_worker_prompt("Fix the typo.").unwrap();
+        assert!(adapted.contains("coding-tooling conventions resolve --root . --json"));
+        assert!(adapted.contains("sourceRevision"));
+        assert!(adapted.ends_with("Fix the typo."));
     }
 
     #[test]
@@ -282,12 +304,15 @@ mod tests {
             "{TASK_PACKET_PROMPT_PREFIX}{}",
             serde_json::to_string_pretty(&packet).unwrap()
         );
-        let adapted = adapt_worker_prompt(&prompt).unwrap();
+        let adapted = prepare_worker_prompt(&prompt).unwrap();
 
+        assert!(adapted.contains("coding-tooling conventions resolve --root . --json"));
         assert!(adapted.contains("one bounded piece of coding work"));
         assert!(adapted.contains("caller-agnostic implementation behavior"));
         assert!(adapted.contains("Add the health endpoint"));
         assert!(adapted.contains("exact baseline Git SHA: 0123456789abcdef"));
+        assert!(adapted.contains("primary convention selection: repository-default"));
+        assert!(adapted.contains("  - repository-default"));
         assert!(adapted.contains("  - src"));
         assert!(adapted.contains("[required] unit-tests: test:unit"));
         assert!(adapted.contains("integration authority: not granted"));
