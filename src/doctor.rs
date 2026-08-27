@@ -10,7 +10,7 @@ use serde::Serialize;
 use crate::{
     adapters::Provider,
     config::ProjectConfig,
-    environment::{self, ComponentDiagnostic, CORE_COMPONENTS},
+    environment::{self, CORE_COMPONENTS, ComponentDiagnostic},
 };
 
 #[derive(Debug, Serialize)]
@@ -52,7 +52,11 @@ pub fn run(config: Option<&ProjectConfig>, requested: Option<Provider>, json: bo
     } else {
         println!("Machine components:");
         for component in &components {
-            let state = if component.ready { "ready" } else { "not ready" };
+            let state = if component.ready {
+                "ready"
+            } else {
+                "not ready"
+            };
             println!("  {}: {state}", component.name);
             if let Some(path) = &component.path {
                 println!("    path: {}", path.display());
