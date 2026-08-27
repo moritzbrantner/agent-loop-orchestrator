@@ -57,7 +57,9 @@ impl FromStr for SkillProfile {
             "minimal" => Ok(Self::Minimal),
             "standard" => Ok(Self::Standard),
             "custom" => Ok(Self::Custom),
-            other => bail!("unsupported skill profile `{other}`; expected minimal, standard, or custom"),
+            other => {
+                bail!("unsupported skill profile `{other}`; expected minimal, standard, or custom")
+            }
         }
     }
 }
