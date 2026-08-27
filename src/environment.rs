@@ -116,7 +116,9 @@ pub fn diagnose_registry(
                 ready: false,
                 error: Some("registered component path does not exist".into()),
             },
-            Some(component) if *name == "coding-tooling" && !coding_tooling_cli(component).is_file() => {
+            Some(component)
+                if *name == "coding-tooling" && !coding_tooling_cli(component).is_file() =>
+            {
                 ComponentDiagnostic {
                     name: (*name).into(),
                     path: Some(component.path.clone()),
