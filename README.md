@@ -9,10 +9,11 @@ When selected, the orchestrator is the local system of record that connects the 
 | Component | Responsibility |
 | --- | --- |
 | `agent-contracts` | Neutral, versioned interchange contracts shared across repositories |
-| `coding-agent-conventions` | Policy, principles, convention profiles, and stable convention IDs |
-| `coding-tooling` | Deterministic repository discovery, affected-scope analysis, and checks |
+| `coding-agent-conventions` | Stable engineering policy, principles, convention profiles, and convention IDs |
+| `coding-agent-skills` | General reusable reasoning skills, executable flows, and automatic-use profiles |
+| `coding-tooling` | Deterministic repository discovery, affected-scope analysis, checks, and capability-source/profile resolution |
 | `runtime-profiler` | Reproducible runtime evidence capture and immutable evidence bundles |
-| `agent-loop-setup` | Reusable worker procedures and environment-specific installation composition |
+| `agent-loop-setup` | Machine bootstrap, shared component registration, independent agent profiles, and setup documentation |
 | `agent-loop-orchestrator` | Optional repository bootstrap, work items, isolated execution, run state, authority, evidence references, decisions, and local integration |
 | `moonlight` | Baseline/candidate comparison and evaluation |
 | `local-refactor` | A specialized refactoring worker |
@@ -56,6 +57,8 @@ codex login
 claude
 ```
 
+The wider coding-agent component locations are registered once by `agent-loop-setup` in `${XDG_CONFIG_HOME:-~/.config}/moenarch/environment.toml`. `agent-loop doctor` reads that registry and reports the core component set (`coding-agent-conventions`, `coding-agent-skills`, and `coding-tooling`) together with provider readiness. If `coding-tooling` is not installed on `PATH`, startup exposes the executable source CLI from the registered checkout through a process-local runtime shim; nothing is copied into the target repository.
+
 ## Opt a repository into orchestrated mode
 
 From a Git repository that needs orchestrated execution:
@@ -88,11 +91,13 @@ check_tier = "fast"
 target_branch = "main"
 ```
 
+The default executable name participates in machine-registry fallback. An explicit non-default executable remains repository-controlled.
+
 See [Claude and Codex adapters](docs/providers.md) for command mappings, permission defaults, event normalization, and the authority boundary.
 
-## Stable control surface for skills
+## Stable control surface for orchestration adapters
 
-`agent-loop control` is the machine-readable integration boundary for `agent-loop-setup` skills and local automation **that opt into orchestrated mode**. Independently invoked skills must not need to parse this interface merely to run. Consumers participating in orchestration should not parse the orchestrator's runtime files or database layout.
+`agent-loop control` is the machine-readable integration boundary for callers, `coding-agent-skills` flows/adapters, and local automation **that opt into orchestrated mode**. Independently invoked skills do not need to parse this interface merely to run. Consumers participating in orchestration should not parse the orchestrator's runtime files or database layout.
 
 Create bounded intent with explicit objective, acceptance criteria, dependencies, and scope:
 
@@ -161,7 +166,7 @@ Neutral `agent.evidence/v1` references represent runtime, check, trace, or other
 2. One clean detached Git worktree is created for its single attempt.
 3. The selected Claude or Codex adapter receives the canonical `agent.task-packet/v1` and runs inside an OS filesystem sandbox with a read-only host view and write access only to the attempt worktree, detached worktree metadata, a run-local Git object store, and temporary files. Provider API access requires network, so the authority snapshot records network as unrestricted rather than claiming a domain boundary this slice cannot enforce.
 4. A successful provider must leave a clean descendant commit whose changed paths are within scope. The commit is retained under an immutable local candidate ref before the worktree is removed.
-5. The external `coding-tooling run --tier <tier> --strict --json` process discovers and executes repository checks. Canonical check results are ingested directly; the currently installed legacy envelope is translated only inside the typed adapter. Missing or malformed tooling stops the run explicitly.
+5. The external `coding-tooling run --tier <tier> --strict --json` process discovers and executes repository checks. The executable may come from `PATH` or the shared machine registry fallback. Canonical check results are ingested directly; the currently installed legacy envelope is translated only inside the typed adapter. Missing or malformed tooling stops the run explicitly.
 6. Passed required checks move the run to `awaiting_decision`. Rejection records a candidate-bound decision and leaves the target unchanged. Approval verifies the target still equals the bound baseline and integrates the exact candidate locally with a fast-forward.
 7. Work items, runs, attempts, provider output, task packets, candidates, checks, evidence, decisions, integration results, and control intent metadata are persisted below the per-user Agent Loop data directory.
 
@@ -169,6 +174,6 @@ This slice never pushes, opens a pull request, publishes remotely, invokes Moonl
 
 ## Boundary
 
-When selected, the orchestrator owns coordination and durable run state. It does not own coding conventions, discover or invent repository checks, capture profiler-specific measurements, decide semantic equivalence itself, or embed Moonlight or specialist implementation logic. It decides when future collectors and evaluators run, not how they normalize measurements or classify differences.
+When selected, the orchestrator owns coordination and durable run state. It does not own coding conventions, reusable reasoning procedures, repository check discovery, profiler-specific measurements, semantic equivalence, Moonlight internals, or specialist implementation logic. It decides when future collectors and evaluators run, not how they normalize measurements or classify differences.
 
 Outside orchestrated mode, those lower-level components and agent procedures remain independently usable. Contract evolution happens in `agent-contracts`; this repository updates its pin deliberately and validates emitted records against that exact revision.

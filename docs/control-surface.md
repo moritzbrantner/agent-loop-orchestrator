@@ -1,6 +1,6 @@
 # Stable control surface
 
-Thin skills and local automation should integrate with the orchestrator through the public CLI, not by reading `execution-state.json`, `control-metadata.json`, run directories, database tables, or other runtime internals.
+Orchestration adapters and local automation should integrate with the orchestrator through the public CLI, not by reading `execution-state.json`, `control-metadata.json`, run directories, database tables, or other runtime internals.
 
 The stable machine-readable boundary is the `agent-loop control` command family. Every invocation emits one JSON object with `schemaVersion: 1`, `ok`, a result `kind`, and `data` on success. Failures emit the same envelope with a stable error `code` and human-readable `message`.
 
@@ -78,6 +78,6 @@ The JSON error envelope distinguishes at least:
 
 A completed command may still return a run whose domain status is `failed`; consumers must inspect the returned run state instead of interpreting process success as candidate success.
 
-## Boundary with agent-loop-setup
+## Boundary with coding-agent-skills and setup
 
-`agent-loop-setup` control/planning/handoff skills should call this CLI plus `agent-loop doctor --json`. They must not depend on the orchestrator's internal persistence layout. The worker/task-packet handoff itself is refined separately by the worker-boundary slice; this control surface is the stable operator/skill interface around that lifecycle.
+`coding-agent-skills` procedures or other callers that deliberately opt into orchestration may call this CLI plus `agent-loop doctor --json`; independently invoked skills do not need this interface. `agent-loop-setup` only registers the machine components and does not own control/planning/handoff procedures. No consumer should depend on the orchestrator's internal persistence layout.
