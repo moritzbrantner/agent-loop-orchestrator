@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     adapters::Provider,
-    config::{ProjectConfig, SkillsConfig},
+    config::{CodexSandbox, ProjectConfig, SkillsConfig},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -70,7 +70,12 @@ pub fn init_with_skills(
     }
 
     fs::create_dir_all(&config_directory)?;
-    let config = ProjectConfig::default_for_with_skills(project_id.clone(), provider, skills);
+    let mut config = ProjectConfig::default_for_with_skills(project_id.clone(), provider, skills);
+    // Local Agent Loop workers are trusted automation. Give Codex the same filesystem
+    // authority as the invoking local agent instead of nesting it inside Agent Loop's
+    // read-only OS sandbox. Candidate scope and integration authority are still checked
+    // after execution by the orchestrator.
+    config.providers.codex.sandbox = CodexSandbox::DangerFullAccess;
     config.validate()?;
     fs::write(&config_path, config.to_toml()?)
         .with_context(|| format!("write {}", config_path.display()))?;
