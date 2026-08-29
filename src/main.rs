@@ -57,7 +57,29 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let queue_heartbeat = is_queue_run().then(QueueHeartbeat::start);
+    let build_cache = match agent_loop_orchestrator::build_cache::activate_for_current_repository() {
+        Ok(cache) => cache,
+        Err(error) => {
+            eprintln!("error: configure shared build cache: {error:#}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let queue_run = is_queue_run();
+    if queue_run && let Some(cache) = &build_cache {
+        let ownership = if cache.managed_target_dir {
+            "managed shared cache"
+        } else {
+            "caller-provided CARGO_TARGET_DIR"
+        };
+        eprintln!(
+            "Agent Loop Rust build target ({ownership}): {}",
+            cache.cargo_target_dir.display()
+        );
+        eprintln!("  Cargo incremental compilation and dev/test debug info are disabled for child validation builds unless explicitly overridden.");
+    }
+
+    let queue_heartbeat = queue_run.then(QueueHeartbeat::start);
     let result = agent_loop_orchestrator::cli::run();
     drop(queue_heartbeat);
 
