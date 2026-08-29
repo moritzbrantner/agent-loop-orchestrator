@@ -34,7 +34,7 @@ The current runtime earns its additional ceremony when the workload benefits fro
 
 Dependency metadata currently gates readiness but does not refresh a dependent work item's frozen baseline after an earlier item integrates. Create or resume downstream work against the current baseline rather than assuming a pre-created chain will be automatically rebased and integrated.
 
-General-purpose scheduling, parallel workers, and coordinated integration of a pre-created dependent chain remain future work. The remote pull-request loop described below is deliberately narrower: it polls one configured GitHub repository, serializes repair attempts through the existing execution lease, and reacts only to observed pull-request state.
+The queue runner adds deterministic serial scheduling for GitHub pull requests and agent-ready issues. Parallel workers and coordinated integration of a pre-created dependent chain remain future work.
 
 Do not create a work item merely to invoke a reusable skill or to make a small sequential code change. The surrounding coding-agent landscape follows a progressive model: direct run → reusable procedures → iterative loop → work items → orchestration.
 
@@ -170,48 +170,43 @@ Neutral `agent.evidence/v1` references represent runtime, check, trace, or other
 6. Passed required checks move the run to `awaiting_decision`. Rejection records a candidate-bound decision and leaves the target unchanged. Approval verifies the target still equals the bound baseline and integrates the exact candidate locally with a fast-forward.
 7. Work items, runs, attempts, provider output, task packets, candidates, checks, evidence, decisions, integration results, and control intent metadata are persisted below the per-user Agent Loop data directory.
 
-The local execution slice never pushes or publishes. Only the opt-in remote pull-request loop may publish an already validated candidate, and only through its guarded GitHub adapter. Neither slice opens pull requests, invokes Moonlight or `runtime-profiler`, or schedules parallel workers.
+The local execution slice never pushes or publishes. Pull-request publication is a separate, opt-in module used by the queue runner after a candidate passes its full deterministic checks. Providers never receive publication or merge authority.
 
-## Reconcile trusted GitHub pull requests
+## Publish and run the GitHub queue
 
-Remote automation is opt-in and disabled by default. It runs beside the local workflow, uses a separate automation checkout below the per-user data directory, and never switches, resets, cleans, or merges the developer checkout.
+Queue automation is opt-in. It uses a separate automation checkout below the per-user data directory and never switches, resets, cleans, or merges the developer checkout.
 
 Configure one registered project explicitly:
 
 ```toml
-[remote]
-enabled = true
-repository = "OWNER/REPOSITORY"
-github_executable = "gh"
-poll_interval_seconds = 30
-auto_merge = true
-repair_failures = true
-repair_conflicts = true
+[publication]
+mode = "pull-request"
+remote = "origin"
+
+[queue]
 max_repair_attempts = 2
+max_items_per_run = 20
 merge_method = "squash"
 provider = "codex"
 trusted_authors = ["YOUR_GITHUB_LOGIN"]
 ```
 
-Before enabling mutation, require the repository's CI check on the target branch, install GitHub CLI, and run `gh auth login` with permission to read Actions logs, push same-repository pull-request branches, and merge pull requests. When remote automation is enabled, `agent-loop doctor` also checks GitHub CLI authentication and access to the configured repository. Cross-repository pull requests are observed but never repaired automatically because the orchestrator has no assumed authority to push into a contributor fork.
+Install GitHub CLI and run `gh auth login` with permission to read issues and pull requests, edit issue labels/comments, push same-repository branches, create pull requests, and merge through the repository's normal policy. `agent-loop doctor` checks GitHub CLI authentication and repository access when pull-request publication is configured.
 
-Inspect the policy without changing remote or durable state:
-
-```bash
-agent-loop remote reconcile --dry-run
-```
-
-Then reconcile once, run from a timer, or keep a local watcher alive:
+Run the queue until it becomes blocked, becomes empty, or reaches its item bound:
 
 ```bash
-agent-loop remote reconcile
-agent-loop remote watch --once
-agent-loop remote watch
+agent-loop queue run
+agent-loop queue run --until-blocked
 ```
 
-The loop keys every action to the observed pull-request head SHA. It waits for pending checks; merges only a trusted, non-draft, green, remotely `CLEAN` pull request with GitHub's exact-head guard; and sends failed checks or merge conflicts through a bounded repair attempt. A repair agent still has no publication authority. It produces a checked candidate in an isolated worktree; the orchestrator integrates that candidate into its private automation branch and pushes with an exact `--force-with-lease`, after which GitHub runs the pull-request pipeline again. Duplicate events and changed heads are reconciled from durable `remote-state.json` state.
+Each cycle refreshes the automation checkout, gives open non-draft pull requests to `coding-tooling pr integrate`, and reacts to that command's structured result. A merge is therefore possible only through coding-tooling's exact-head, full-check integration gate; the orchestrator never invokes `gh pr merge` itself.
 
-The trusted-author allowlist is also the security boundary for local repair. Repository checks execute code from the pull-request worktree, so do not add authors whose commits are not trusted to run on this machine. Drafts, untrusted authors, exhausted repairs, review/policy blockers, and contributor-fork publication all stop at `needs_human`; the loop does not close or reject the remote pull request on an agent's judgment.
+Repairable integration failures create one isolated repair Work Item at the exact observed PR head. A checked repair candidate is pushed back to the same branch with `--force-with-lease=<branch>:<old-sha>` and integration is retried. A moved head fails closed and refreshes. After two failed repair cycles for one PR, that item stops and is reported.
+
+When no PR is actionable, the runner selects the lowest-numbered open, non-PRD issue labeled `ready-for-agent` whose YAML frontmatter declares `scope` and whose `blocked_by` issues are closed. It creates a bounded Work Item, runs the standard provider procedure with the `full` check tier, pushes the exact checked candidate to `agent-loop/issue-<number>`, creates a ready (non-draft) PR that closes the issue, verifies the PR head, and records its number-bearing URL as the candidate's pull-request publication.
+
+PRs published by this queue are remembered as queue-owned. Other existing PRs are actionable only when their author appears in `queue.trusted_authors`; this is also the trust decision that allows their code and checks to execute locally. Pending checks, required reviews, drafts, contributor-fork repairs, blocked issues, missing issue scope, and exhausted repair budgets are reported as blockers. `max_items_per_run = 20` is an independent safety bound even for an `--until-blocked` invocation.
 
 ## Boundary
 

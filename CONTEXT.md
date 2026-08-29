@@ -13,7 +13,7 @@ A durable canonical lifecycle for one local Work Item, including its exact basel
 _Avoid_: Job, task, execution
 
 **Active Run**:
-The single Run currently launching, executing, evaluating, awaiting a decision, or integrating through the local execution lease. This may be a human-created local Run or a Remote Repair; no other Run may become active until it reaches a terminal outcome.
+The single Run currently launching, executing, evaluating, awaiting a decision, or integrating through the local execution lease. This may be a human-created local Run, an Issue Implementation, or a Pull Request Repair; no other Run may become active until it reaches a terminal outcome.
 _Avoid_: Current task, worker
 
 **Work Item**:
@@ -25,16 +25,20 @@ The exact clean Git commit produced by an Attempt and retained by an immutable l
 _Avoid_: Working tree, latest changes
 
 **Decision**:
-An approval or rejection bound to an exact Candidate. Human-created local Runs require an explicit human decision. A Remote Repair may record the configured orchestration policy as its actor before guarded publication; rejection never integrates.
+An approval or rejection bound to an exact Candidate. Human-created local Runs require an explicit human decision. Queue-created Runs may record the configured queue policy as their actor before guarded publication; rejection never integrates.
 _Avoid_: Agent confidence, implicit approval
 
-**Remote Pull Request Loop**:
-The opt-in polling workflow that reconciles open GitHub pull requests by exact head SHA, waits for their remote checks, applies trusted-author and merge policy, and starts bounded Remote Repairs when configured.
-_Avoid_: Webhook, remote worker
+**Queue Runner**:
+The bounded serial scheduler that refreshes one GitHub repository, delegates pull-request integration to coding-tooling, repairs exact PR heads when allowed, and publishes checked Candidates for unblocked agent-ready issues.
+_Avoid_: Infinite loop, webhook
 
-**Remote Repair**:
-A Run created from an exact same-repository pull-request head in an orchestrator-owned automation checkout to fix failed checks or merge conflicts. Its Provider cannot publish; the Remote Pull Request Loop may publish the checked Candidate with an exact-head lease.
+**Pull Request Repair**:
+A Run created from an exact same-repository pull-request head in an orchestrator-owned automation checkout to fix a repairable integration failure. Its Provider cannot publish; the Queue Runner may publish the checked Candidate with an exact-head lease.
 _Avoid_: CI rerun, direct bot push
+
+**Issue Implementation**:
+A Run created from an unblocked `ready-for-agent` GitHub Issue and the current target-branch head. Its checked Candidate may be published as a ready pull request by the Queue Runner.
+_Avoid_: Raw issue triage, PRD decomposition
 
 **Completion Notification**:
 An in-app and optional browser desktop notice that an Active Run has reached a terminal outcome.

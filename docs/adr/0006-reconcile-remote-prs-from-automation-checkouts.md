@@ -1,6 +1,6 @@
 # ADR 0006: Reconcile remote pull requests from automation checkouts
 
-- Status: Accepted
+- Status: Superseded by ADR 0007
 - Date: 2026-08-27
 
 ## Context

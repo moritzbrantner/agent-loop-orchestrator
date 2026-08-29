@@ -8,6 +8,7 @@ pub mod doctor;
 pub mod environment;
 pub mod execution;
 pub mod process;
-pub mod remote;
+pub mod publication;
+pub mod queue;
 pub mod repository;
 pub mod server;

@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::{
     adapters::Provider,
-    config::ProjectConfig,
+    config::{ProjectConfig, PublicationMode},
     environment::{self, CORE_COMPONENTS, ComponentDiagnostic},
 };
 
@@ -26,8 +26,7 @@ pub struct Diagnostic {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct RemoteDiagnostic {
-    repository: String,
+struct PublicationDiagnostic {
     executable: String,
     found_at: Option<PathBuf>,
     version: Option<String>,
@@ -42,10 +41,15 @@ struct DoctorReport<'a> {
     components: &'a [ComponentDiagnostic],
     providers: &'a [Diagnostic],
     #[serde(skip_serializing_if = "Option::is_none")]
-    remote: Option<&'a RemoteDiagnostic>,
+    publication: Option<&'a PublicationDiagnostic>,
 }
 
-pub fn run(config: Option<&ProjectConfig>, requested: Option<Provider>, json: bool) -> Result<()> {
+pub fn run(
+    config: Option<&ProjectConfig>,
+    repository_root: Option<&Path>,
+    requested: Option<Provider>,
+    json: bool,
+) -> Result<()> {
     let components = environment::diagnose_required_components(CORE_COMPONENTS)?;
     let providers: Vec<Provider> = requested
         .map(|provider| vec![provider])
@@ -54,7 +58,9 @@ pub fn run(config: Option<&ProjectConfig>, requested: Option<Provider>, json: bo
         .into_iter()
         .map(|provider| diagnose(config, provider))
         .collect();
-    let remote = config.and_then(diagnose_remote);
+    let publication = config
+        .zip(repository_root)
+        .and_then(|(config, root)| diagnose_publication(config, root));
 
     if json {
         println!(
@@ -62,7 +68,7 @@ pub fn run(config: Option<&ProjectConfig>, requested: Option<Provider>, json: bo
             serde_json::to_string_pretty(&DoctorReport {
                 components: &components,
                 providers: &diagnostics,
-                remote: remote.as_ref(),
+                publication: publication.as_ref(),
             })?
         );
     } else {
@@ -104,22 +110,21 @@ pub fn run(config: Option<&ProjectConfig>, requested: Option<Provider>, json: bo
                 println!("    issue: {error}");
             }
         }
-        if let Some(remote) = &remote {
-            let state = if remote.authenticated && remote.repository_accessible {
+        if let Some(publication) = &publication {
+            let state = if publication.authenticated && publication.repository_accessible {
                 "ready"
             } else {
                 "not ready"
             };
-            println!("Remote GitHub automation: {state}");
-            println!("  repository: {}", remote.repository);
-            println!("  executable: {}", remote.executable);
-            if let Some(path) = &remote.found_at {
+            println!("Pull-request publication: {state}");
+            println!("  executable: {}", publication.executable);
+            if let Some(path) = &publication.found_at {
                 println!("  path: {}", path.display());
             }
-            if let Some(version) = &remote.version {
+            if let Some(version) = &publication.version {
                 println!("  version: {version}");
             }
-            if let Some(error) = &remote.error {
+            if let Some(error) = &publication.error {
                 println!("  issue: {error}");
             }
         }
@@ -136,28 +141,25 @@ pub fn run(config: Option<&ProjectConfig>, requested: Option<Provider>, json: bo
     {
         bail!("one or more requested providers are not ready");
     }
-    if remote
+    if publication
         .as_ref()
-        .is_some_and(|remote| !remote.authenticated || !remote.repository_accessible)
+        .is_some_and(|publication| !publication.authenticated || !publication.repository_accessible)
     {
-        bail!("remote GitHub automation is not ready");
+        bail!("pull-request publication is not ready");
     }
     Ok(())
 }
 
-fn diagnose_remote(config: &ProjectConfig) -> Option<RemoteDiagnostic> {
-    if !config.remote.enabled {
+fn diagnose_publication(
+    config: &ProjectConfig,
+    repository_root: &Path,
+) -> Option<PublicationDiagnostic> {
+    if config.publication.mode != PublicationMode::PullRequest {
         return None;
     }
-    let repository = config
-        .remote
-        .repository
-        .clone()
-        .unwrap_or_else(|| "(missing)".into());
-    let executable = config.remote.github_executable.clone();
+    let executable = config.publication.github_executable.clone();
     let Some(found_at) = environment::find_on_path(OsStr::new(&executable)) else {
-        return Some(RemoteDiagnostic {
-            repository,
+        return Some(PublicationDiagnostic {
             executable,
             found_at: None,
             version: None,
@@ -168,17 +170,17 @@ fn diagnose_remote(config: &ProjectConfig) -> Option<RemoteDiagnostic> {
     };
     let version = command_text(&found_at, &["--version"]).ok();
     let authentication = command_success(&found_at, &["auth", "status"]);
-    let repository_access = command_success(
+    let repository_access = command_success_in(
         &found_at,
-        &["repo", "view", &repository, "--json", "nameWithOwner"],
+        &["repo", "view", "--json", "nameWithOwner"],
+        repository_root,
     );
     let error = authentication
         .as_ref()
         .err()
         .cloned()
         .or_else(|| repository_access.as_ref().err().cloned());
-    Some(RemoteDiagnostic {
-        repository,
+    Some(PublicationDiagnostic {
         executable,
         found_at: Some(found_at),
         version,
@@ -234,4 +236,20 @@ fn command_text(executable: &Path, args: &[&str]) -> std::result::Result<String,
 
 fn command_success(executable: &Path, args: &[&str]) -> std::result::Result<(), String> {
     command_text(executable, args).map(|_| ())
+}
+
+fn command_success_in(
+    executable: &Path,
+    args: &[&str],
+    current_dir: &Path,
+) -> std::result::Result<(), String> {
+    let output = Command::new(executable)
+        .args(args)
+        .current_dir(current_dir)
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+    }
+    Ok(())
 }

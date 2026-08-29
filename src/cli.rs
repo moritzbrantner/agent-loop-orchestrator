@@ -1,4 +1,4 @@
-use std::{fs, io, net::SocketAddr, path::PathBuf, str::FromStr, thread, time::Duration};
+use std::{fs, io, net::SocketAddr, path::PathBuf, str::FromStr};
 
 use anyhow::{Context, Result, bail};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
@@ -11,7 +11,7 @@ use crate::{
     config::{ProjectConfig, SkillProfile, SkillsConfig},
     control,
     execution::{CreateWorkItem, DecisionRequest, ExecutionOverrides, ExecutionService},
-    remote::{GitHubRemoteHost, LocalRepairExecutor, ReconcileOutcome, RemotePullRequestLoop},
+    queue::{GitHubQueuePlatform, LocalQueueWorker, QueueRunner},
     repository::{self, RegisteredProject, find_repository_root},
 };
 
@@ -96,10 +96,10 @@ enum Commands {
         #[arg(long, default_value = ".")]
         repository: PathBuf,
     },
-    /// Reconcile remote pull requests without touching the developer checkout.
-    Remote {
+    /// Process pull requests and agent-ready issues until the queue must stop.
+    Queue {
         #[command(subcommand)]
-        command: RemoteCommands,
+        command: QueueCommands,
     },
     /// Serve the authenticated React dashboard.
     Serve {
@@ -115,22 +115,14 @@ enum Commands {
 }
 
 #[derive(Debug, Subcommand)]
-enum RemoteCommands {
-    /// Inspect every open pull request once and apply the configured policy.
-    Reconcile {
+enum QueueCommands {
+    /// Refresh and process work until blocked, empty, or bounded by configuration.
+    Run {
         #[arg(long, default_value = ".")]
         repository: PathBuf,
-        /// Report the actions that would run without merging, repairing, or updating state.
+        /// Explicitly document the normal stop policy at the call site.
         #[arg(long)]
-        dry_run: bool,
-    },
-    /// Poll and reconcile open pull requests until the process is stopped.
-    Watch {
-        #[arg(long, default_value = ".")]
-        repository: PathBuf,
-        /// Reconcile once and exit; useful for cron and service timers.
-        #[arg(long)]
-        once: bool,
+        until_blocked: bool,
     },
 }
 
@@ -406,38 +398,20 @@ pub fn run() -> Result<()> {
             repository,
         } => {
             let provider = provider.as_deref().map(Provider::from_str).transpose()?;
-            let config = find_repository_root(&repository)
-                .ok()
-                .and_then(|root| ProjectConfig::load(&root).ok());
-            crate::doctor::run(config.as_ref(), provider, json)?;
+            let root = find_repository_root(&repository).ok();
+            let config = root
+                .as_ref()
+                .and_then(|root| ProjectConfig::load(root).ok());
+            crate::doctor::run(config.as_ref(), root.as_deref(), provider, json)?;
         }
-        Commands::Remote { command } => match command {
-            RemoteCommands::Reconcile {
+        Commands::Queue { command } => match command {
+            QueueCommands::Run {
                 repository,
-                dry_run,
-            } => {
-                let outcomes = reconcile_remote(&repository, dry_run)?;
-                println!("{}", serde_json::to_string_pretty(&outcomes)?);
-            }
-            RemoteCommands::Watch { repository, once } => loop {
-                match reconcile_remote(&repository, false) {
-                    Ok(outcomes) => println!("{}", serde_json::to_string(&outcomes)?),
-                    Err(error) if once => return Err(error),
-                    Err(error) => eprintln!(
-                        "{}",
-                        serde_json::to_string(&ReconcileOutcome::Error {
-                            number: None,
-                            reason: format!("{error:#}"),
-                        })?
-                    ),
-                }
-                if once {
-                    break;
-                }
-                let root = find_repository_root(&repository)?;
-                let config = ProjectConfig::load(&root)?;
-                thread::sleep(Duration::from_secs(config.remote.poll_interval_seconds));
-            },
+                until_blocked: _,
+            } => println!(
+                "{}",
+                serde_json::to_string_pretty(&run_queue(&repository)?)?
+            ),
         },
         Commands::Serve { bind } => {
             tokio::runtime::Runtime::new()?
@@ -639,6 +613,7 @@ fn run_control(command: ControlCommands) -> Result<(&'static str, Value)> {
                     objective: Some(intent.objective),
                     acceptance: (!intent.acceptance.is_empty()).then_some(intent.acceptance),
                     dependencies: Some(intent.dependencies),
+                    check_tier: None,
                 },
                 None,
                 |_| {},
@@ -760,18 +735,17 @@ fn execution_service() -> Result<ExecutionService> {
     ExecutionService::load(repository::data_directory()?)
 }
 
-fn reconcile_remote(
-    repository_path: &std::path::Path,
-    dry_run: bool,
-) -> Result<Vec<ReconcileOutcome>> {
+fn run_queue(repository_path: &std::path::Path) -> Result<crate::queue::QueueReport> {
     let root = find_repository_root(repository_path)?;
     let config = ProjectConfig::load(&root)?;
     let project = registered_project_for_root(&root, &config)?;
     let data_root = repository::data_directory()?;
-    let host = GitHubRemoteHost::new(config.remote.github_executable.clone());
-    let mut repairs = LocalRepairExecutor::new(&data_root, config.remote.github_executable.clone());
-    RemotePullRequestLoop::new(&data_root, &host, &mut repairs)
-        .reconcile(&project, &config, dry_run)
+    let mut platform = GitHubQueuePlatform::prepare(&data_root, &project, &config)?;
+    let repository = platform.repository().to_owned();
+    let checkout = platform.checkout().to_owned();
+    let mut worker =
+        LocalQueueWorker::new(&data_root, project, config.clone(), &repository, checkout);
+    QueueRunner::new(&data_root, repository, &config, &mut platform, &mut worker).run()
 }
 
 fn registered_project_for_root(

@@ -153,6 +153,7 @@ pub struct ExecutionOverrides {
     pub objective: Option<String>,
     pub acceptance: Option<Vec<AcceptanceCriterion>>,
     pub dependencies: Option<Vec<String>>,
+    pub check_tier: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -254,6 +255,34 @@ impl ExecutionService {
         provider: Provider,
         overrides: ExecutionOverrides,
         cancellation: Option<&AtomicBool>,
+        observe: impl FnMut(ProcessEvent),
+    ) -> Result<LocalRun> {
+        self.refresh()?;
+        let work_item = self
+            .state
+            .work_items
+            .iter()
+            .find(|item| &item.id == work_item_id)
+            .cloned()
+            .with_context(|| format!("work item {work_item_id} was not found"))?;
+        let config = ProjectConfig::load(&work_item.repository_root)?;
+        self.run_work_item_with_config(
+            work_item_id,
+            provider,
+            &config,
+            overrides,
+            cancellation,
+            observe,
+        )
+    }
+
+    pub fn run_work_item_with_config(
+        &mut self,
+        work_item_id: &Uuid,
+        provider: Provider,
+        config: &ProjectConfig,
+        overrides: ExecutionOverrides,
+        cancellation: Option<&AtomicBool>,
         mut observe: impl FnMut(ProcessEvent),
     ) -> Result<LocalRun> {
         self.refresh()?;
@@ -267,7 +296,6 @@ impl ExecutionService {
         if work_item.status != WorkItemStatus::Open {
             bail!("work item {work_item_id} is not open");
         }
-        let config = ProjectConfig::load(&work_item.repository_root)?;
         let run_id = Uuid::new_v4();
         let run_directory = self.data_root.join("runs").join(run_id.to_string());
         let worktree_path = self
@@ -279,7 +307,7 @@ impl ExecutionService {
         let (contract, packet) = build_contracts(
             run_id,
             &work_item,
-            &config,
+            config,
             provider,
             &overrides,
             &worktree_path,
@@ -326,7 +354,7 @@ impl ExecutionService {
             serde_json::to_string_pretty(&packet)?
         );
         let command = match provider_adapter.command(
-            &config,
+            config,
             &RunRequest {
                 repository_root: &worktree_path,
                 prompt: &provider_prompt,
@@ -482,7 +510,10 @@ impl ExecutionService {
 
         let checks = CodingToolingAdapter {
             executable: &config.execution.coding_tooling_executable,
-            tier: &config.execution.check_tier,
+            tier: overrides
+                .check_tier
+                .as_deref()
+                .unwrap_or(&config.execution.check_tier),
         }
         .run(&worktree_path, &run_directory, &candidate_sha);
         run.contract.checks = checks;
