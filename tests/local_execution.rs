@@ -13,6 +13,7 @@ use std::{
 use agent_loop_orchestrator::{
     adapters::Provider,
     config::ProjectConfig,
+    contracts::{Publication, PublicationKind, PublicationStatus},
     execution::{CreateWorkItem, DecisionRequest, ExecutionService, LocalRunStatus},
     repository::RegisteredProject,
 };
@@ -88,6 +89,46 @@ fn successful_run_integrates_the_exact_checked_candidate() {
         "hello from provider\n"
     );
     assert!(!integrated.worktree_path.exists());
+}
+
+#[test]
+fn completed_run_records_exact_candidate_remote_publication_idempotently() {
+    let fixture = Fixture::new();
+    let mut service = ExecutionService::load(fixture.data.path()).unwrap();
+    let work_item = create_default_work_item(&fixture, &mut service);
+    let run = service
+        .run_work_item(&work_item.id, Provider::Codex, None, |_| {})
+        .unwrap();
+    let candidate = run.contract.candidates[0].git_sha.clone().unwrap();
+    service
+        .decide(
+            run.id,
+            DecisionRequest::Approve {
+                actor: "remote-loop".into(),
+                reason: None,
+            },
+        )
+        .unwrap();
+    let publication = Publication {
+        publication_id: "pull-request-publication".into(),
+        kind: PublicationKind::PullRequest,
+        candidate_identity: candidate,
+        status: PublicationStatus::Succeeded,
+        external_id: Some("https://example.test/pull/42".into()),
+        occurred_at: chrono::Utc::now(),
+        evidence: Vec::new(),
+    };
+
+    service
+        .record_publication(run.id, publication.clone())
+        .unwrap();
+    let recorded = service.record_publication(run.id, publication).unwrap();
+
+    assert_eq!(recorded.contract.publications.len(), 2);
+    assert_eq!(
+        recorded.contract.publications[1].kind,
+        PublicationKind::PullRequest
+    );
 }
 
 #[test]

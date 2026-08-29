@@ -1,4 +1,4 @@
-use std::{fs, io, net::SocketAddr, path::PathBuf, str::FromStr};
+use std::{fs, io, net::SocketAddr, path::PathBuf, str::FromStr, thread, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
@@ -11,6 +11,7 @@ use crate::{
     config::{ProjectConfig, SkillProfile, SkillsConfig},
     control,
     execution::{CreateWorkItem, DecisionRequest, ExecutionOverrides, ExecutionService},
+    remote::{GitHubRemoteHost, LocalRepairExecutor, ReconcileOutcome, RemotePullRequestLoop},
     repository::{self, RegisteredProject, find_repository_root},
 };
 
@@ -95,6 +96,11 @@ enum Commands {
         #[arg(long, default_value = ".")]
         repository: PathBuf,
     },
+    /// Reconcile remote pull requests without touching the developer checkout.
+    Remote {
+        #[command(subcommand)]
+        command: RemoteCommands,
+    },
     /// Serve the authenticated React dashboard.
     Serve {
         /// LAN address and port to listen on.
@@ -105,6 +111,26 @@ enum Commands {
     Completions {
         #[arg(value_enum)]
         shell: CompletionShell,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum RemoteCommands {
+    /// Inspect every open pull request once and apply the configured policy.
+    Reconcile {
+        #[arg(long, default_value = ".")]
+        repository: PathBuf,
+        /// Report the actions that would run without merging, repairing, or updating state.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Poll and reconcile open pull requests until the process is stopped.
+    Watch {
+        #[arg(long, default_value = ".")]
+        repository: PathBuf,
+        /// Reconcile once and exit; useful for cron and service timers.
+        #[arg(long)]
+        once: bool,
     },
 }
 
@@ -385,6 +411,34 @@ pub fn run() -> Result<()> {
                 .and_then(|root| ProjectConfig::load(&root).ok());
             crate::doctor::run(config.as_ref(), provider, json)?;
         }
+        Commands::Remote { command } => match command {
+            RemoteCommands::Reconcile {
+                repository,
+                dry_run,
+            } => {
+                let outcomes = reconcile_remote(&repository, dry_run)?;
+                println!("{}", serde_json::to_string_pretty(&outcomes)?);
+            }
+            RemoteCommands::Watch { repository, once } => loop {
+                match reconcile_remote(&repository, false) {
+                    Ok(outcomes) => println!("{}", serde_json::to_string(&outcomes)?),
+                    Err(error) if once => return Err(error),
+                    Err(error) => eprintln!(
+                        "{}",
+                        serde_json::to_string(&ReconcileOutcome::Error {
+                            number: None,
+                            reason: format!("{error:#}"),
+                        })?
+                    ),
+                }
+                if once {
+                    break;
+                }
+                let root = find_repository_root(&repository)?;
+                let config = ProjectConfig::load(&root)?;
+                thread::sleep(Duration::from_secs(config.remote.poll_interval_seconds));
+            },
+        },
         Commands::Serve { bind } => {
             tokio::runtime::Runtime::new()?
                 .block_on(crate::server::serve(crate::server::ServeOptions { bind }))?;
@@ -704,6 +758,20 @@ fn control_error_code(error: &anyhow::Error) -> &'static str {
 
 fn execution_service() -> Result<ExecutionService> {
     ExecutionService::load(repository::data_directory()?)
+}
+
+fn reconcile_remote(
+    repository_path: &std::path::Path,
+    dry_run: bool,
+) -> Result<Vec<ReconcileOutcome>> {
+    let root = find_repository_root(repository_path)?;
+    let config = ProjectConfig::load(&root)?;
+    let project = registered_project_for_root(&root, &config)?;
+    let data_root = repository::data_directory()?;
+    let host = GitHubRemoteHost::new(config.remote.github_executable.clone());
+    let mut repairs = LocalRepairExecutor::new(&data_root, config.remote.github_executable.clone());
+    RemotePullRequestLoop::new(&data_root, &host, &mut repairs)
+        .reconcile(&project, &config, dry_run)
 }
 
 fn registered_project_for_root(

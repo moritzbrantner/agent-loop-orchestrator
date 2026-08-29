@@ -20,6 +20,8 @@ pub struct ProjectConfig {
     pub paths: KnowledgePaths,
     #[serde(default, skip_serializing_if = "ReviewConfig::is_default")]
     pub reviews: ReviewConfig,
+    #[serde(default, skip_serializing_if = "RemoteConfig::is_default")]
+    pub remote: RemoteConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -38,6 +40,151 @@ impl Default for ExecutionConfig {
             target_branch: "main".into(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
+    #[serde(default = "default_github_executable")]
+    pub github_executable: String,
+    #[serde(default = "default_poll_interval_seconds")]
+    pub poll_interval_seconds: u64,
+    #[serde(default)]
+    pub auto_merge: bool,
+    #[serde(default)]
+    pub repair_failures: bool,
+    #[serde(default)]
+    pub repair_conflicts: bool,
+    #[serde(default = "default_max_repair_attempts")]
+    pub max_repair_attempts: u32,
+    #[serde(default)]
+    pub merge_method: MergeMethod,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<Provider>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trusted_authors: Vec<String>,
+}
+
+impl Default for RemoteConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            repository: None,
+            github_executable: default_github_executable(),
+            poll_interval_seconds: default_poll_interval_seconds(),
+            auto_merge: false,
+            repair_failures: false,
+            repair_conflicts: false,
+            max_repair_attempts: default_max_repair_attempts(),
+            merge_method: MergeMethod::default(),
+            provider: None,
+            trusted_authors: Vec::new(),
+        }
+    }
+}
+
+impl RemoteConfig {
+    fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+
+    pub fn repository(&self) -> Result<&str> {
+        self.repository
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .context("remote.repository is required when remote automation is enabled")
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.github_executable.trim().is_empty() {
+            bail!("remote.github_executable cannot be empty");
+        }
+        if self.poll_interval_seconds == 0 {
+            bail!("remote.poll_interval_seconds must be greater than zero");
+        }
+        if self.max_repair_attempts == 0 {
+            bail!("remote.max_repair_attempts must be greater than zero");
+        }
+        if self.enabled {
+            validate_repository_slug(self.repository()?)?;
+        } else if let Some(repository) = self.repository.as_deref() {
+            validate_repository_slug(repository)?;
+        }
+        if self.enabled
+            && (self.auto_merge || self.repair_failures || self.repair_conflicts)
+            && self.trusted_authors.is_empty()
+        {
+            bail!(
+                "remote.trusted_authors must name at least one trusted GitHub login before remote mutation is enabled"
+            );
+        }
+        let mut seen = HashSet::new();
+        for author in &self.trusted_authors {
+            if author.trim().is_empty() || author.chars().any(char::is_whitespace) {
+                bail!("remote.trusted_authors entries cannot be empty or contain whitespace");
+            }
+            if !seen.insert(author.to_ascii_lowercase()) {
+                bail!("remote.trusted_authors contains duplicate `{author}`");
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum MergeMethod {
+    Merge,
+    Rebase,
+    #[default]
+    Squash,
+}
+
+impl MergeMethod {
+    pub fn as_gh_flag(self) -> &'static str {
+        match self {
+            Self::Merge => "--merge",
+            Self::Rebase => "--rebase",
+            Self::Squash => "--squash",
+        }
+    }
+}
+
+fn default_github_executable() -> String {
+    "gh".into()
+}
+
+const fn default_poll_interval_seconds() -> u64 {
+    30
+}
+
+const fn default_max_repair_attempts() -> u32 {
+    2
+}
+
+fn validate_repository_slug(value: &str) -> Result<()> {
+    let Some((owner, repository)) = value.split_once('/') else {
+        bail!("remote.repository must use OWNER/REPOSITORY format");
+    };
+    if !valid_repository_segment(owner)
+        || !valid_repository_segment(repository)
+        || repository.contains('/')
+    {
+        bail!("remote.repository must use OWNER/REPOSITORY format");
+    }
+    Ok(())
+}
+
+fn valid_repository_segment(value: &str) -> bool {
+    !value.is_empty()
+        && !matches!(value, "." | "..")
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+        })
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -183,6 +330,7 @@ pub struct CodexConfig {
 pub enum CodexSandbox {
     ReadOnly,
     WorkspaceWrite,
+    DangerFullAccess,
 }
 
 impl CodexSandbox {
@@ -190,6 +338,7 @@ impl CodexSandbox {
         match self {
             Self::ReadOnly => "read-only",
             Self::WorkspaceWrite => "workspace-write",
+            Self::DangerFullAccess => "danger-full-access",
         }
     }
 }
@@ -284,6 +433,7 @@ impl ProjectConfig {
             skills,
             paths: KnowledgePaths::default(),
             reviews: ReviewConfig::default(),
+            remote: RemoteConfig::default(),
         }
     }
 
@@ -327,6 +477,7 @@ impl ProjectConfig {
         validate_optional_path("paths.domain", self.paths.domain.as_deref())?;
         validate_optional_path("paths.adrs", self.paths.adrs.as_deref())?;
         validate_optional_path("paths.reviews", self.paths.reviews.as_deref())?;
+        self.remote.validate()?;
         Ok(())
     }
 }
@@ -371,6 +522,7 @@ mod tests {
         assert_eq!(decoded.skills.profile, SkillProfile::Standard);
         assert!(!encoded.contains("[paths]"));
         assert!(!encoded.contains("[reviews]"));
+        assert!(!encoded.contains("[remote]"));
     }
 
     #[test]
@@ -406,6 +558,29 @@ allowed_tools = []
         let config: ProjectConfig = toml::from_str(encoded).unwrap();
         assert_eq!(config.execution, ExecutionConfig::default());
         assert_eq!(config.skills, SkillsConfig::default());
+        assert_eq!(config.remote, RemoteConfig::default());
+    }
+
+    #[test]
+    fn enabled_remote_automation_requires_a_repository_slug() {
+        let mut config = ProjectConfig::default_for("demo".into(), Provider::Codex);
+        config.remote.enabled = true;
+        assert!(config.validate().is_err());
+
+        config.remote.repository = Some("owner/demo".into());
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn remote_mutation_requires_an_explicit_trusted_author() {
+        let mut config = ProjectConfig::default_for("demo".into(), Provider::Codex);
+        config.remote.enabled = true;
+        config.remote.repository = Some("owner/demo".into());
+        config.remote.auto_merge = true;
+        assert!(config.validate().is_err());
+
+        config.remote.trusted_authors = vec!["trusted-login".into()];
+        assert!(config.validate().is_ok());
     }
 
     #[test]

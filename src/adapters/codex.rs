@@ -31,7 +31,12 @@ impl AgentAdapter for CodexAdapter {
             request.repository_root.as_os_str().to_owned(),
         ];
 
-        if automatically_approve {
+        if matches!(
+            provider.sandbox,
+            crate::config::CodexSandbox::DangerFullAccess
+        ) {
+            args.push("--dangerously-bypass-approvals-and-sandbox".into());
+        } else if automatically_approve {
             args.push("--approve-for-me".into());
         } else {
             args.extend(["--sandbox".into(), provider.sandbox.as_cli_value().into()]);
@@ -115,6 +120,30 @@ mod tests {
         assert!(
             args.windows(2)
                 .any(|pair| { pair == ["resume", "0199a213-81c0-7800-8aa1-bbab2a035a53"] })
+        );
+    }
+
+    #[test]
+    fn uses_explicit_bypass_only_for_full_access_configuration() {
+        let mut config = ProjectConfig::default_for("demo".into(), Provider::Codex);
+        config.providers.codex.sandbox = crate::config::CodexSandbox::DangerFullAccess;
+        let command = CodexAdapter
+            .command(
+                &config,
+                &RunRequest {
+                    repository_root: std::path::Path::new("/tmp/demo"),
+                    prompt: "implement it",
+                    resume_session: None,
+                    model_override: None,
+                    effort_override: None,
+                },
+            )
+            .unwrap();
+        assert!(
+            command
+                .args
+                .iter()
+                .any(|arg| arg == "--dangerously-bypass-approvals-and-sandbox")
         );
     }
 }

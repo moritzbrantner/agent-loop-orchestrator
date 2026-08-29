@@ -345,20 +345,28 @@ impl ExecutionService {
                 return self.finish_failed(run, &run_directory, message);
             }
         };
-        let command = match sandbox_provider_command(
-            &command,
-            &worktree_path,
-            &run_directory,
-            &candidate_object_directory,
-        ) {
-            Ok(command) => command,
-            Err(error) => {
-                let message = failure_with_cleanup(
-                    &work_item.repository_root,
-                    &worktree_path,
-                    format!("enforce provider authority: {error}"),
-                );
-                return self.finish_failed(run, &run_directory, message);
+        let command = if matches!(provider, Provider::Codex)
+            && matches!(
+                config.providers.codex.sandbox,
+                crate::config::CodexSandbox::DangerFullAccess
+            ) {
+            command
+        } else {
+            match sandbox_provider_command(
+                &command,
+                &worktree_path,
+                &run_directory,
+                &candidate_object_directory,
+            ) {
+                Ok(command) => command,
+                Err(error) => {
+                    let message = failure_with_cleanup(
+                        &work_item.repository_root,
+                        &worktree_path,
+                        format!("enforce provider authority: {error}"),
+                    );
+                    return self.finish_failed(run, &run_directory, message);
+                }
             }
         };
         let mut observed = Vec::new();
@@ -607,6 +615,56 @@ impl ExecutionService {
                 Ok(run)
             }
         }
+    }
+
+    pub fn record_publication(
+        &mut self,
+        run_id: Uuid,
+        publication: Publication,
+    ) -> Result<LocalRun> {
+        let lock = self.lock_exclusive()?;
+        self.reload()?;
+        let mut run = self
+            .state
+            .runs
+            .iter()
+            .find(|run| run.id == run_id)
+            .cloned()
+            .with_context(|| format!("run {run_id} was not found"))?;
+        if run.status != LocalRunStatus::Completed {
+            bail!("run {run_id} is not completed");
+        }
+        let candidate_sha = run
+            .contract
+            .candidates
+            .last()
+            .and_then(|candidate| candidate.git_sha.as_deref())
+            .context("run has no Git candidate")?;
+        if publication.candidate_identity != candidate_sha {
+            bail!("publication candidate does not match run candidate");
+        }
+        if run.contract.publications.iter().any(|stored| {
+            stored.kind == publication.kind
+                && stored.candidate_identity == publication.candidate_identity
+                && stored.external_id == publication.external_id
+                && stored.status == publication.status
+        }) {
+            FileExt::unlock(&lock)?;
+            return Ok(run);
+        }
+        run.contract.publications.push(publication);
+        let stored = self
+            .state
+            .runs
+            .iter_mut()
+            .find(|stored| stored.id == run_id)
+            .context("stored run was not found")?;
+        *stored = run.clone();
+        let run_directory = self.data_root.join("runs").join(run.id.to_string());
+        run.contract.write_to(&run_directory.join("run.json"))?;
+        self.write_state()?;
+        FileExt::unlock(&lock)?;
+        Ok(run)
     }
 
     fn finish_failed(
@@ -983,13 +1041,22 @@ fn build_contracts(
     let authority = Authority {
         schema_version: 1,
         // Provider CLIs need their installed runtime and local authentication state.
-        // The OS sandbox therefore exposes the host read-only and narrows writes.
+        // Full access is an explicit per-repository opt-in; every other mode is
+        // wrapped by the OS sandbox below.
         read_roots: vec!["/".into()],
-        write_roots: vec![
-            worktree_path.display().to_string(),
-            run_directory.display().to_string(),
-            common_directory.join("worktrees").display().to_string(),
-        ],
+        write_roots: if matches!(provider, Provider::Codex)
+            && matches!(
+                config.providers.codex.sandbox,
+                crate::config::CodexSandbox::DangerFullAccess
+            ) {
+            vec!["/".into()]
+        } else {
+            vec![
+                worktree_path.display().to_string(),
+                run_directory.display().to_string(),
+                common_directory.join("worktrees").display().to_string(),
+            ]
+        },
         network: NetworkAuthority {
             // Provider CLIs require network access to their model APIs. This first slice
             // does not claim domain-level isolation it cannot enforce.

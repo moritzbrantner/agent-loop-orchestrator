@@ -28,3 +28,11 @@ jobs:
         run: cargo +stable test --all-targets --all-features
       - name: Check setup scripts
         run: bash -n setup.sh scripts/setup.sh
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+      - name: Install dashboard dependencies
+        working-directory: web
+        run: bun install --frozen-lockfile
+      - name: Build dashboard
+        working-directory: web
+        run: bun run build

@@ -26,9 +26,23 @@ pub struct Diagnostic {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct RemoteDiagnostic {
+    repository: String,
+    executable: String,
+    found_at: Option<PathBuf>,
+    version: Option<String>,
+    authenticated: bool,
+    repository_accessible: bool,
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DoctorReport<'a> {
     components: &'a [ComponentDiagnostic],
     providers: &'a [Diagnostic],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    remote: Option<&'a RemoteDiagnostic>,
 }
 
 pub fn run(config: Option<&ProjectConfig>, requested: Option<Provider>, json: bool) -> Result<()> {
@@ -40,6 +54,7 @@ pub fn run(config: Option<&ProjectConfig>, requested: Option<Provider>, json: bo
         .into_iter()
         .map(|provider| diagnose(config, provider))
         .collect();
+    let remote = config.and_then(diagnose_remote);
 
     if json {
         println!(
@@ -47,6 +62,7 @@ pub fn run(config: Option<&ProjectConfig>, requested: Option<Provider>, json: bo
             serde_json::to_string_pretty(&DoctorReport {
                 components: &components,
                 providers: &diagnostics,
+                remote: remote.as_ref(),
             })?
         );
     } else {
@@ -88,6 +104,25 @@ pub fn run(config: Option<&ProjectConfig>, requested: Option<Provider>, json: bo
                 println!("    issue: {error}");
             }
         }
+        if let Some(remote) = &remote {
+            let state = if remote.authenticated && remote.repository_accessible {
+                "ready"
+            } else {
+                "not ready"
+            };
+            println!("Remote GitHub automation: {state}");
+            println!("  repository: {}", remote.repository);
+            println!("  executable: {}", remote.executable);
+            if let Some(path) = &remote.found_at {
+                println!("  path: {}", path.display());
+            }
+            if let Some(version) = &remote.version {
+                println!("  version: {version}");
+            }
+            if let Some(error) = &remote.error {
+                println!("  issue: {error}");
+            }
+        }
     }
 
     if components.iter().any(|component| !component.ready) {
@@ -101,7 +136,56 @@ pub fn run(config: Option<&ProjectConfig>, requested: Option<Provider>, json: bo
     {
         bail!("one or more requested providers are not ready");
     }
+    if remote
+        .as_ref()
+        .is_some_and(|remote| !remote.authenticated || !remote.repository_accessible)
+    {
+        bail!("remote GitHub automation is not ready");
+    }
     Ok(())
+}
+
+fn diagnose_remote(config: &ProjectConfig) -> Option<RemoteDiagnostic> {
+    if !config.remote.enabled {
+        return None;
+    }
+    let repository = config
+        .remote
+        .repository
+        .clone()
+        .unwrap_or_else(|| "(missing)".into());
+    let executable = config.remote.github_executable.clone();
+    let Some(found_at) = environment::find_on_path(OsStr::new(&executable)) else {
+        return Some(RemoteDiagnostic {
+            repository,
+            executable,
+            found_at: None,
+            version: None,
+            authenticated: false,
+            repository_accessible: false,
+            error: Some("GitHub CLI executable not found on PATH".into()),
+        });
+    };
+    let version = command_text(&found_at, &["--version"]).ok();
+    let authentication = command_success(&found_at, &["auth", "status"]);
+    let repository_access = command_success(
+        &found_at,
+        &["repo", "view", &repository, "--json", "nameWithOwner"],
+    );
+    let error = authentication
+        .as_ref()
+        .err()
+        .cloned()
+        .or_else(|| repository_access.as_ref().err().cloned());
+    Some(RemoteDiagnostic {
+        repository,
+        executable,
+        found_at: Some(found_at),
+        version,
+        authenticated: authentication.is_ok(),
+        repository_accessible: repository_access.is_ok(),
+        error,
+    })
 }
 
 fn diagnose(config: Option<&ProjectConfig>, provider: Provider) -> Diagnostic {

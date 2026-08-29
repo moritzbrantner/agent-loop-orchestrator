@@ -34,7 +34,7 @@ The current runtime earns its additional ceremony when the workload benefits fro
 
 Dependency metadata currently gates readiness but does not refresh a dependent work item's frozen baseline after an earlier item integrates. Create or resume downstream work against the current baseline rather than assuming a pre-created chain will be automatically rebased and integrated.
 
-Scheduling, automatic retries, parallel workers, and coordinated integration of a pre-created dependent chain are sensible **future** reasons to escalate to an orchestrator, but the implemented slice does not provide them yet. Do not select the current runtime solely because a workload requires those capabilities.
+General-purpose scheduling, parallel workers, and coordinated integration of a pre-created dependent chain remain future work. The remote pull-request loop described below is deliberately narrower: it polls one configured GitHub repository, serializes repair attempts through the existing execution lease, and reacts only to observed pull-request state.
 
 Do not create a work item merely to invoke a reusable skill or to make a small sequential code change. The surrounding coding-agent landscape follows a progressive model: direct run → reusable procedures → iterative loop → work items → orchestration.
 
@@ -164,13 +164,54 @@ Neutral `agent.evidence/v1` references represent runtime, check, trace, or other
 
 1. A local work item binds a registered project, declared write scope, target branch, and exact baseline SHA.
 2. One clean detached Git worktree is created for its single attempt.
-3. The selected Claude or Codex adapter receives the canonical `agent.task-packet/v1` and runs inside an OS filesystem sandbox with a read-only host view and write access only to the attempt worktree, detached worktree metadata, a run-local Git object store, and temporary files. Provider API access requires network, so the authority snapshot records network as unrestricted rather than claiming a domain boundary this slice cannot enforce.
+3. The selected Claude or Codex adapter receives the canonical `agent.task-packet/v1` and normally runs inside an OS filesystem sandbox with a read-only host view and write access only to the attempt worktree, detached worktree metadata, a run-local Git object store, and temporary files. A repository may explicitly opt Codex into `danger-full-access` for trusted local automation; that bypasses both filesystem sandboxes and is never the default. Provider API access requires network, so the authority snapshot records network as unrestricted rather than claiming a domain boundary this slice cannot enforce.
 4. A successful provider must leave a clean descendant commit whose changed paths are within scope. The commit is retained under an immutable local candidate ref before the worktree is removed.
 5. The external `coding-tooling run --tier <tier> --strict --json` process discovers and executes repository checks. The executable may come from `PATH` or the shared machine registry fallback. Canonical check results are ingested directly; the currently installed legacy envelope is translated only inside the typed adapter. Missing or malformed tooling stops the run explicitly.
 6. Passed required checks move the run to `awaiting_decision`. Rejection records a candidate-bound decision and leaves the target unchanged. Approval verifies the target still equals the bound baseline and integrates the exact candidate locally with a fast-forward.
 7. Work items, runs, attempts, provider output, task packets, candidates, checks, evidence, decisions, integration results, and control intent metadata are persisted below the per-user Agent Loop data directory.
 
-This slice never pushes, opens a pull request, publishes remotely, invokes Moonlight or `runtime-profiler`, retries, or schedules parallel workers.
+The local execution slice never pushes or publishes. Only the opt-in remote pull-request loop may publish an already validated candidate, and only through its guarded GitHub adapter. Neither slice opens pull requests, invokes Moonlight or `runtime-profiler`, or schedules parallel workers.
+
+## Reconcile trusted GitHub pull requests
+
+Remote automation is opt-in and disabled by default. It runs beside the local workflow, uses a separate automation checkout below the per-user data directory, and never switches, resets, cleans, or merges the developer checkout.
+
+Configure one registered project explicitly:
+
+```toml
+[remote]
+enabled = true
+repository = "OWNER/REPOSITORY"
+github_executable = "gh"
+poll_interval_seconds = 30
+auto_merge = true
+repair_failures = true
+repair_conflicts = true
+max_repair_attempts = 2
+merge_method = "squash"
+provider = "codex"
+trusted_authors = ["YOUR_GITHUB_LOGIN"]
+```
+
+Before enabling mutation, require the repository's CI check on the target branch, install GitHub CLI, and run `gh auth login` with permission to read Actions logs, push same-repository pull-request branches, and merge pull requests. When remote automation is enabled, `agent-loop doctor` also checks GitHub CLI authentication and access to the configured repository. Cross-repository pull requests are observed but never repaired automatically because the orchestrator has no assumed authority to push into a contributor fork.
+
+Inspect the policy without changing remote or durable state:
+
+```bash
+agent-loop remote reconcile --dry-run
+```
+
+Then reconcile once, run from a timer, or keep a local watcher alive:
+
+```bash
+agent-loop remote reconcile
+agent-loop remote watch --once
+agent-loop remote watch
+```
+
+The loop keys every action to the observed pull-request head SHA. It waits for pending checks; merges only a trusted, non-draft, green, remotely `CLEAN` pull request with GitHub's exact-head guard; and sends failed checks or merge conflicts through a bounded repair attempt. A repair agent still has no publication authority. It produces a checked candidate in an isolated worktree; the orchestrator integrates that candidate into its private automation branch and pushes with an exact `--force-with-lease`, after which GitHub runs the pull-request pipeline again. Duplicate events and changed heads are reconciled from durable `remote-state.json` state.
+
+The trusted-author allowlist is also the security boundary for local repair. Repository checks execute code from the pull-request worktree, so do not add authors whose commits are not trusted to run on this machine. Drafts, untrusted authors, exhausted repairs, review/policy blockers, and contributor-fork publication all stop at `needs_human`; the loop does not close or reject the remote pull request on an agent's judgment.
 
 ## Boundary
 
