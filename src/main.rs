@@ -45,13 +45,34 @@ impl Drop for QueueHeartbeat {
     }
 }
 
-fn is_queue_run() -> bool {
-    let arguments = std::env::args().skip(1).take(2).collect::<Vec<_>>();
+fn arguments() -> Vec<String> {
+    std::env::args().skip(1).collect()
+}
+
+fn is_queue_run(arguments: &[String]) -> bool {
     arguments.first().is_some_and(|argument| argument == "queue")
         && arguments.get(1).is_some_and(|argument| argument == "run")
 }
 
+fn run_storage(arguments: &[String]) -> Option<ExitCode> {
+    if !arguments.first().is_some_and(|argument| argument == "storage") {
+        return None;
+    }
+    Some(match agent_loop_orchestrator::storage::run_cli(&arguments[1..]) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("error: {error:#}");
+            ExitCode::FAILURE
+        }
+    })
+}
+
 fn main() -> ExitCode {
+    let arguments = arguments();
+    if let Some(exit) = run_storage(&arguments) {
+        return exit;
+    }
+
     if let Err(error) = agent_loop_orchestrator::environment::activate_registered_tools() {
         eprintln!("error: {error:#}");
         return ExitCode::FAILURE;
@@ -65,7 +86,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let queue_run = is_queue_run();
+    let queue_run = is_queue_run(&arguments);
     if queue_run && let Some(cache) = &build_cache {
         let ownership = if cache.managed_target_dir {
             "managed shared cache"
