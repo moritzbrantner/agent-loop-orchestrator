@@ -13,3 +13,4 @@ pub mod publication;
 pub mod queue;
 pub mod repository;
 pub mod server;
+pub mod storage;
