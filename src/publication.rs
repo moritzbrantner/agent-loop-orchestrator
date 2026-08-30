@@ -1,5 +1,5 @@
 use std::{
-    path::{Path, PathBuf},
+    path::Path,
     process::{Command, Output},
 };
 
@@ -352,14 +352,6 @@ fn github_failure(executable: &str, output: &Output) -> String {
         "{executable} failed: {}",
         String::from_utf8_lossy(&output.stderr).trim()
     )
-}
-
-pub fn automation_checkout_path(data_root: &Path, repository: &str) -> Result<PathBuf> {
-    validate_repository_slug(repository)?;
-    let (owner, name) = repository
-        .split_once('/')
-        .context("GitHub repository must use OWNER/REPOSITORY format")?;
-    Ok(data_root.join("queue-checkouts").join(owner).join(name))
 }
 
 #[cfg(all(test, unix))]
