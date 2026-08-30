@@ -174,7 +174,7 @@ The local execution slice never pushes or publishes. Pull-request publication is
 
 ## Publish and run the GitHub queue
 
-Queue automation is opt-in. It uses a separate automation checkout below the per-user data directory and never switches, resets, cleans, or merges the developer checkout.
+Queue automation is opt-in. Queue-level fetch, pull-request integration, and guarded publication use the registered repository checkout directly and require it to be clean. Issue implementations and pull-request repairs still run in the execution service's ordinary detached Git worktrees. Agent Loop does not create a second full repository clone for queue processing.
 
 Configure one registered project explicitly:
 
@@ -200,7 +200,7 @@ agent-loop queue run
 agent-loop queue run --until-blocked
 ```
 
-Each cycle refreshes the automation checkout, gives open non-draft pull requests to `coding-tooling pr integrate`, and reacts to that command's structured result. A merge is therefore possible only through coding-tooling's exact-head, full-check integration gate; the orchestrator never invokes `gh pr merge` itself.
+Each cycle fetches the configured remote in the registered checkout, gives open non-draft pull requests to `coding-tooling pr integrate`, and reacts to that command's structured result. A merge is therefore possible only through coding-tooling's exact-head, full-check integration gate; the orchestrator never invokes `gh pr merge` itself.
 
 Repairable integration failures create one isolated repair Work Item at the exact observed PR head. A checked repair candidate is pushed back to the same branch with `--force-with-lease=<branch>:<old-sha>` and integration is retried. A moved head fails closed and refreshes. After two failed repair cycles for one PR, that item stops and is reported.
 

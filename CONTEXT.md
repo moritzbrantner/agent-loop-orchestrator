@@ -33,7 +33,7 @@ The bounded serial scheduler that refreshes one GitHub repository, delegates pul
 _Avoid_: Infinite loop, webhook
 
 **Pull Request Repair**:
-A Run created from an exact same-repository pull-request head in an orchestrator-owned automation checkout to fix a repairable integration failure. Its Provider cannot publish; the Queue Runner may publish the checked Candidate with an exact-head lease.
+A Run created from an exact same-repository pull-request head in an ordinary detached Git worktree to fix a repairable integration failure. Its Provider cannot publish; the Queue Runner may publish the checked Candidate with an exact-head lease.
 _Avoid_: CI rerun, direct bot push
 
 **Issue Implementation**:
