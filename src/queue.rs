@@ -21,7 +21,6 @@ use crate::{
     },
     publication::{
         NewPullRequest, PullRequestPublication, PullRequestPublisher, PullRequestRepair,
-        automation_checkout_path,
     },
     repository::RegisteredProject,
 };
@@ -614,13 +613,13 @@ pub struct GitHubQueuePlatform {
 
 impl GitHubQueuePlatform {
     pub fn prepare(
-        data_root: &Path,
+        _data_root: &Path,
         project: &RegisteredProject,
         config: &ProjectConfig,
     ) -> Result<Self> {
         let publisher = PullRequestPublisher::new(config.publication.github_executable.clone());
         let repository = publisher.repository_slug(&project.repository_root)?;
-        let checkout = automation_checkout_path(data_root, &repository)?;
+        let checkout = project.repository_root.clone();
         Ok(Self {
             source_root: project.repository_root.clone(),
             checkout,
@@ -647,30 +646,10 @@ impl GitHubQueuePlatform {
 
 impl QueuePlatform for GitHubQueuePlatform {
     fn refresh(&mut self) -> Result<()> {
-        if self.checkout.exists() {
-            git_ok(&self.checkout, &["fetch", "--prune", &self.remote])?;
-        } else {
-            let parent = self
-                .checkout
-                .parent()
-                .context("queue checkout has no parent")?;
-            fs::create_dir_all(parent)?;
-            let remote_url = git(&self.source_root, &["remote", "get-url", &self.remote])?;
-            let output = Command::new("git")
-                .args(["clone", "--origin", &self.remote, &remote_url])
-                .arg(&self.checkout)
-                .output()
-                .context("create queue automation checkout")?;
-            if !output.status.success() {
-                bail!(
-                    "git clone failed: {}",
-                    String::from_utf8_lossy(&output.stderr).trim()
-                );
-            }
-        }
+        git_ok(&self.checkout, &["fetch", "--prune", &self.remote])?;
         let status = git(&self.checkout, &["status", "--porcelain"])?;
         if !status.is_empty() {
-            bail!("queue automation checkout is not clean");
+            bail!("registered repository checkout is not clean");
         }
         Ok(())
     }
