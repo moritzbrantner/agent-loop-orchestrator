@@ -1,5 +1,5 @@
 use std::{
-    path::{Path, PathBuf},
+    path::Path,
     process::{Command, Output},
 };
 
@@ -356,7 +356,7 @@ fn github_failure(executable: &str, output: &Output) -> String {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use std::{fs, os::unix::fs::PermissionsExt};
+    use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
 
     use tempfile::TempDir;
 
