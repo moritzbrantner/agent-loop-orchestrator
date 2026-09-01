@@ -1,16 +1,9 @@
 #![cfg(unix)]
 
-use std::{
-    fs,
-    os::unix::fs::PermissionsExt,
-    path::Path,
-    process::Command,
-};
+use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
 
 use agent_loop_orchestrator::{
-    adapters::Provider,
-    config::ProjectConfig,
-    queue::GitHubQueuePlatform,
+    adapters::Provider, config::ProjectConfig, queue::GitHubQueuePlatform,
     repository::RegisteredProject,
 };
 use tempfile::TempDir;
@@ -22,7 +15,10 @@ fn queue_uses_registered_repository_instead_of_creating_a_private_clone() {
     let data = root.path().join("data");
     fs::create_dir_all(&repository).unwrap();
     git_ok(&repository, &["init", "-b", "main"]);
-    git_ok(&repository, &["config", "user.name", "Queue Workspace Test"]);
+    git_ok(
+        &repository,
+        &["config", "user.name", "Queue Workspace Test"],
+    );
     git_ok(
         &repository,
         &["config", "user.email", "queue-workspace@example.test"],
