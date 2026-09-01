@@ -14,18 +14,18 @@ impl QueueHeartbeat {
     fn start() -> Self {
         eprintln!("Agent Loop queue started.");
         eprintln!("  Local repository verification is authoritative.");
-        eprintln!("  Hosted GitHub checks are advisory; review and merge safety gates still apply.");
+        eprintln!(
+            "  Hosted GitHub checks are advisory; review and merge safety gates still apply."
+        );
         eprintln!("  Long local pipelines or agent runs may take several minutes.");
 
         let (stop, receiver) = mpsc::channel();
-        let handle = thread::spawn(move || {
-            loop {
-                match receiver.recv_timeout(Duration::from_secs(10)) {
-                    Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
-                    Err(RecvTimeoutError::Timeout) => eprintln!(
-                        "  … still working (local verification or agent execution in progress)"
-                    ),
-                }
+        let handle = thread::spawn(move || loop {
+            match receiver.recv_timeout(Duration::from_secs(10)) {
+                Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
+                Err(RecvTimeoutError::Timeout) => eprintln!(
+                    "  … still working (local verification or agent execution in progress)"
+                ),
             }
         });
         Self {
@@ -47,7 +47,9 @@ impl Drop for QueueHeartbeat {
 
 fn is_queue_run() -> bool {
     let arguments = std::env::args().skip(1).take(2).collect::<Vec<_>>();
-    arguments.first().is_some_and(|argument| argument == "queue")
+    arguments
+        .first()
+        .is_some_and(|argument| argument == "queue")
         && arguments.get(1).is_some_and(|argument| argument == "run")
 }
 
