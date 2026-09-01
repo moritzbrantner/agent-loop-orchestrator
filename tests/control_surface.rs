@@ -228,6 +228,8 @@ impl Fixture {
         );
 
         let mut config = ProjectConfig::load(fixture.repository.path()).unwrap();
+        config.providers.codex.sandbox =
+            agent_loop_orchestrator::config::CodexSandbox::DangerFullAccess;
         config.providers.codex.executable = fixture.provider.display().to_string();
         config.execution.coding_tooling_executable = fixture.tooling.display().to_string();
         fs::write(
