@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::{
     adapters::{Provider, RunRequest, adapter},
-    config::ProjectConfig,
+    config::{EnvironmentProfile, ProjectConfig},
     contracts::{
         self, AcceptanceCriterion, Attempt, AttemptOutcome, Authority, Baseline, Candidate,
         CandidateIdentity, CandidateKind, CheckOutcome, CheckResult, ComponentSet,
@@ -343,6 +343,19 @@ impl ExecutionService {
             );
             return self.finish_failed(run, &run_directory, message);
         }
+        if let Err(error) = verify_environment(
+            &config.execution.coding_tooling_executable,
+            config.execution.environment_profile,
+            &worktree_path,
+            &run_directory,
+        ) {
+            let message = failure_with_cleanup(
+                &work_item.repository_root,
+                &worktree_path,
+                format!("environment verification failed before provider launch: {error}"),
+            );
+            return self.finish_failed(run, &run_directory, message);
+        }
         run.contract.state = RunState::Running;
         run.status = LocalRunStatus::Running;
         self.replace_run(&run)?;
@@ -441,6 +454,9 @@ impl ExecutionService {
             .ok()
             .and_then(|outcome| outcome.provider_session_id.clone());
         attempt.evidence = contracts::evidence_from_directory(&run_directory)?;
+        attempt
+            .evidence
+            .extend(environment_verification_evidence(&run_directory)?);
         if let Some(error) = output_persistence_error {
             attempt.outcome = AttemptOutcome::Failed;
             let message = failure_with_cleanup(
@@ -732,6 +748,9 @@ impl ExecutionService {
                 attempt.outcome = AttemptOutcome::Failed;
             }
             attempt.evidence = contracts::evidence_from_directory(run_directory)?;
+            attempt
+                .evidence
+                .extend(environment_verification_evidence(run_directory)?);
             attempt.evidence.push(contracts::evidence_for_file(
                 "orchestrator-error",
                 &failure_path,
@@ -1084,9 +1103,6 @@ fn build_contracts(
     };
     let authority = Authority {
         schema_version: 1,
-        // Provider CLIs need their installed runtime and local authentication state.
-        // Full access is an explicit per-repository opt-in; every other mode is
-        // wrapped by the OS sandbox below.
         read_roots: vec!["/".into()],
         write_roots: if matches!(provider, Provider::Codex)
             && matches!(
@@ -1102,8 +1118,6 @@ fn build_contracts(
             ]
         },
         network: NetworkAuthority {
-            // Provider CLIs require network access to their model APIs. This first slice
-            // does not claim domain-level isolation it cannot enforce.
             mode: NetworkMode::Unrestricted,
             allowed_domains: Vec::new(),
         },
@@ -1262,6 +1276,142 @@ fn create_worktree(repository: &Path, worktree: &Path, baseline: &str) -> Result
         bail!("new worktree is not clean");
     }
     Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EnvironmentVerificationEnvelope {
+    schema_version: u8,
+    operation: String,
+    status: String,
+    data: EnvironmentVerificationData,
+    #[serde(default)]
+    diagnostics: Vec<EnvironmentVerificationDiagnostic>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EnvironmentVerificationData {
+    action: String,
+    fingerprint_version: String,
+    profile: String,
+    expected_fingerprint: Option<String>,
+    verified_fingerprint: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct EnvironmentVerificationDiagnostic {
+    #[serde(default)]
+    code: Option<String>,
+    message: String,
+}
+
+fn verify_environment(
+    executable: &str,
+    profile: EnvironmentProfile,
+    worktree: &Path,
+    run_directory: &Path,
+) -> Result<()> {
+    let stdout_path = run_directory.join("environment-verification.json");
+    let stderr_path = run_directory.join("environment-verification.stderr.log");
+    let output = Command::new(executable)
+        .args([
+            "environment",
+            "verify",
+            "--profile",
+            profile.as_cli_value(),
+            "--json",
+        ])
+        .current_dir(worktree)
+        .output();
+    let output = match output {
+        Ok(output) => output,
+        Err(error) => {
+            fs::write(&stderr_path, error.to_string())?;
+            bail!("coding-tooling environment verification unavailable: {error}");
+        }
+    };
+    fs::write(&stdout_path, &output.stdout)?;
+    fs::write(&stderr_path, &output.stderr)?;
+    let envelope: EnvironmentVerificationEnvelope = serde_json::from_slice(&output.stdout)
+        .context("parse coding-tooling environment verification receipt")?;
+    let diagnostics = environment_diagnostic_reason(&envelope.diagnostics);
+    if !output.status.success() {
+        bail!(
+            "coding-tooling environment verification exited with {}{}",
+            output.status,
+            diagnostics
+        );
+    }
+    if envelope.schema_version != 1
+        || envelope.operation != "environment"
+        || envelope.data.action != "verify"
+        || envelope.data.fingerprint_version != "environment-fingerprint-v1"
+    {
+        bail!("unsupported coding-tooling environment verification receipt");
+    }
+    if envelope.data.profile != profile.as_cli_value() {
+        bail!(
+            "environment verification profile mismatch: expected {}, got {}",
+            profile.as_cli_value(),
+            envelope.data.profile
+        );
+    }
+    if envelope.status != "passed" {
+        bail!("environment did not verify{}", diagnostics);
+    }
+    let expected = envelope
+        .data
+        .expected_fingerprint
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .context("environment verification receipt has no expectedFingerprint")?;
+    let verified = envelope
+        .data
+        .verified_fingerprint
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .context("environment verification receipt has no verifiedFingerprint")?;
+    if expected != verified {
+        bail!("environment fingerprint mismatch: expected {expected}, verified {verified}");
+    }
+    Ok(())
+}
+
+fn environment_diagnostic_reason(diagnostics: &[EnvironmentVerificationDiagnostic]) -> String {
+    if diagnostics.is_empty() {
+        return String::new();
+    }
+    let joined = diagnostics
+        .iter()
+        .map(|diagnostic| match diagnostic.code.as_deref() {
+            Some(code) => format!("[{code}] {}", diagnostic.message),
+            None => diagnostic.message.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!(": {joined}")
+}
+
+fn environment_verification_evidence(run_directory: &Path) -> Result<Vec<contracts::Evidence>> {
+    let mut evidence = Vec::new();
+    let stdout_path = run_directory.join("environment-verification.json");
+    if stdout_path.exists() {
+        evidence.push(contracts::evidence_for_file(
+            "environment-verification",
+            &stdout_path,
+            "application/json",
+        )?);
+    }
+    let stderr_path = run_directory.join("environment-verification.stderr.log");
+    if stderr_path.exists() {
+        evidence.push(contracts::evidence_for_file(
+            "environment-verification-stderr",
+            &stderr_path,
+            "text/plain",
+        )?);
+    }
+    Ok(evidence)
 }
 
 #[cfg(target_os = "linux")]
@@ -1562,12 +1712,6 @@ fn create_candidate_ref(
     Ok(())
 }
 
-/// Typed boundary around the external deterministic tooling process.
-///
-/// Orchestration consumes canonical check results only. The legacy envelope
-/// translation is deliberately contained here and can be removed without
-/// changing the run state machine once every installed tool emits
-/// `agent.check-result/v1` directly.
 struct CodingToolingAdapter<'a> {
     executable: &'a str,
     tier: &'a str,
