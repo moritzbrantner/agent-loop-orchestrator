@@ -156,7 +156,7 @@ impl Fixture {
         let tooling = root.path().join("fake-coding-tooling");
         executable(
             &tooling,
-            "#!/bin/sh\nset -eu\ncandidate=$(git rev-parse HEAD)\nprintf '{\"schemaVersion\":1,\"checkId\":\"full\",\"capability\":\"test\",\"candidate\":{\"kind\":\"git-commit\",\"identity\":\"%s\"},\"outcome\":\"passed\",\"required\":true,\"startedAt\":\"2026-08-29T10:00:00Z\",\"finishedAt\":\"2026-08-29T10:00:01Z\",\"exitCode\":0,\"evidence\":[]}\n' \"$candidate\"\n",
+            "#!/bin/sh\nset -eu\nif [ \"${1:-}\" = \"environment\" ] && [ \"${2:-}\" = \"verify\" ]; then\n  profile=${4:-default}\n  printf '{\"schemaVersion\":1,\"operation\":\"environment\",\"status\":\"passed\",\"durationMs\":1,\"data\":{\"action\":\"verify\",\"fingerprintVersion\":\"environment-fingerprint-v1\",\"profile\":\"%s\",\"expectedFingerprint\":\"env-v1:sha256:queue\",\"verifiedFingerprint\":\"env-v1:sha256:queue\"},\"diagnostics\":[]}\\n' \"$profile\"\n  exit 0\nfi\ncandidate=$(git rev-parse HEAD)\nprintf '{\"schemaVersion\":1,\"checkId\":\"full\",\"capability\":\"test\",\"candidate\":{\"kind\":\"git-commit\",\"identity\":\"%s\"},\"outcome\":\"passed\",\"required\":true,\"startedAt\":\"2026-08-29T10:00:00Z\",\"finishedAt\":\"2026-08-29T10:00:01Z\",\"exitCode\":0,\"evidence\":[]}\n' \"$candidate\"\n",
         );
         let github = root.path().join("fake-gh");
         executable(
