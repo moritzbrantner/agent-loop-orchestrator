@@ -2068,6 +2068,7 @@ fn git_with_objects(
     candidate_object_directory: &Path,
     arguments: &[&str],
 ) -> Result<String> {
+    let git_directory = git(repository, &["rev-parse", "--absolute-git-dir"])?;
     let common_directory = PathBuf::from(git(repository, &["rev-parse", "--git-common-dir"])?);
     let common_directory = if common_directory.is_absolute() {
         common_directory
@@ -2077,6 +2078,7 @@ fn git_with_objects(
     let output = Command::new("git")
         .args(arguments)
         .current_dir(repository)
+        .env("GIT_DIR", git_directory)
         .env("GIT_OBJECT_DIRECTORY", candidate_object_directory)
         .env(
             "GIT_ALTERNATE_OBJECT_DIRECTORIES",
