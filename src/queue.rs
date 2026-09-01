@@ -1682,10 +1682,12 @@ mod tests {
                 .count(),
             1
         );
-        assert!(report.events.iter().any(|event| matches!(
-            event,
-            QueueEvent::RepairSkippedNoInformationGain { .. }
-        )));
+        assert!(
+            report
+                .events
+                .iter()
+                .any(|event| matches!(event, QueueEvent::RepairSkippedNoInformationGain { .. }))
+        );
     }
 
     #[test]
