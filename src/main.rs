@@ -20,12 +20,14 @@ impl QueueHeartbeat {
         eprintln!("  Long local pipelines or agent runs may take several minutes.");
 
         let (stop, receiver) = mpsc::channel();
-        let handle = thread::spawn(move || loop {
-            match receiver.recv_timeout(Duration::from_secs(10)) {
-                Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
-                Err(RecvTimeoutError::Timeout) => eprintln!(
-                    "  … still working (local verification or agent execution in progress)"
-                ),
+        let handle = thread::spawn(move || {
+            loop {
+                match receiver.recv_timeout(Duration::from_secs(10)) {
+                    Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
+                    Err(RecvTimeoutError::Timeout) => eprintln!(
+                        "  … still working (local verification or agent execution in progress)"
+                    ),
+                }
             }
         });
         Self {
