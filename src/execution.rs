@@ -349,6 +349,12 @@ impl ExecutionService {
 
         let provider_adapter = adapter(provider);
         let candidate_object_directory = run_directory.join("candidate-objects");
+        fs::create_dir_all(&candidate_object_directory).with_context(|| {
+            format!(
+                "create candidate object directory {}",
+                candidate_object_directory.display()
+            )
+        })?;
         let provider_prompt = format!(
             "Implement the work described by this canonical agent.task-packet/v1. Leave the worktree clean and commit the completed candidate. You have no authority to integrate, push, publish, or otherwise mutate a remote system.\n\n{}",
             serde_json::to_string_pretty(&packet)?
@@ -2068,17 +2074,7 @@ fn git_with_objects(
     candidate_object_directory: &Path,
     arguments: &[&str],
 ) -> Result<String> {
-    let common_directory = PathBuf::from(
-        git(repository, &["rev-parse", "--git-common-dir"]).with_context(|| {
-            format!(
-                "resolve candidate worktree Git metadata at {} (worktree exists: {}, marker exists: {}, candidate objects exist: {})",
-                repository.display(),
-                repository.exists(),
-                repository.join(".git").exists(),
-                candidate_object_directory.exists(),
-            )
-        })?,
-    );
+    let common_directory = PathBuf::from(git(repository, &["rev-parse", "--git-common-dir"])?);
     let common_directory = if common_directory.is_absolute() {
         common_directory
     } else {
@@ -2096,12 +2092,8 @@ fn git_with_objects(
         .with_context(|| format!("run git {}", arguments.join(" ")))?;
     if !output.status.success() {
         bail!(
-            "git {} failed in {} (worktree marker exists: {}, candidate objects exist: {}, common objects exist: {}): {}",
+            "git {} failed: {}",
             arguments.join(" "),
-            repository.display(),
-            repository.join(".git").exists(),
-            candidate_object_directory.exists(),
-            common_directory.join("objects").exists(),
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
