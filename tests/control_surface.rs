@@ -228,8 +228,6 @@ impl Fixture {
         );
 
         let mut config = ProjectConfig::load(fixture.repository.path()).unwrap();
-        config.providers.codex.sandbox =
-            agent_loop_orchestrator::config::CodexSandbox::DangerFullAccess;
         config.providers.codex.executable = fixture.provider.display().to_string();
         config.execution.coding_tooling_executable = fixture.tooling.display().to_string();
         fs::write(
@@ -270,6 +268,9 @@ impl Fixture {
         Command::new(env!("CARGO_BIN_EXE_agent-loop"))
             .args(args)
             .current_dir(self.repository.path())
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_COMMON_DIR")
             .env("XDG_DATA_HOME", self.data.path())
             .env("HOME", self.data.path())
             .env("PATH", path)
