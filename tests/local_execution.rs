@@ -12,7 +12,7 @@ use std::{
 
 use agent_loop_orchestrator::{
     adapters::Provider,
-    config::ProjectConfig,
+    config::{EnvironmentProfile, ProjectConfig},
     contracts::{Publication, PublicationKind, PublicationStatus},
     execution::{CreateWorkItem, DecisionRequest, ExecutionService, LocalRunStatus},
     repository::RegisteredProject,
@@ -21,6 +21,9 @@ use tempfile::TempDir;
 
 const SUCCESSFUL_PROVIDER: &str = "set -eu\nprintf 'hello from provider\\n' > greeting.txt\ngit add greeting.txt\ngit commit -m 'candidate' >/dev/null\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"fake-thread\"}'";
 const PASSED_CHECK: &str = "set -eu\ncandidate=$(git rev-parse HEAD)\nprintf '{\"schemaVersion\":1,\"checkId\":\"fake-check\",\"capability\":\"test\",\"candidate\":{\"kind\":\"git-commit\",\"identity\":\"%s\"},\"outcome\":\"passed\",\"required\":true,\"startedAt\":\"2026-08-15T10:00:00Z\",\"finishedAt\":\"2026-08-15T10:00:01Z\",\"exitCode\":0,\"evidence\":[]}\\n' \"$candidate\"";
+const PASSED_ENVIRONMENT_VERIFY: &str = r#"set -eu
+profile=${4:-default}
+printf '{"schemaVersion":1,"operation":"environment","status":"passed","durationMs":1,"data":{"action":"verify","fingerprintVersion":"environment-fingerprint-v1","profile":"%s","expectedFingerprint":"env-v1:sha256:test","verifiedFingerprint":"env-v1:sha256:test"},"diagnostics":[]}\n' "$profile""#;
 
 #[test]
 fn successful_run_integrates_the_exact_checked_candidate() {
@@ -45,14 +48,23 @@ fn successful_run_integrates_the_exact_checked_candidate() {
         run.contract.authority.network.mode,
         agent_loop_orchestrator::contracts::NetworkMode::Unrestricted
     );
+    let run_directory = fixture.data.path().join("runs").join(run.id.to_string());
+    assert!(run_directory.join("task-packet.json").exists());
+    assert!(run_directory.join("environment-verification.json").exists());
     assert!(
-        fixture
-            .data
-            .path()
-            .join("runs")
-            .join(run.id.to_string())
-            .join("task-packet.json")
-            .exists()
+        run.contract.attempts[0]
+            .evidence
+            .iter()
+            .any(|evidence| evidence.kind == "environment-verification")
+    );
+    let receipt: serde_json::Value = serde_json::from_slice(
+        &fs::read(run_directory.join("environment-verification.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(receipt["data"]["profile"], "default");
+    assert_eq!(
+        receipt["data"]["expectedFingerprint"],
+        receipt["data"]["verifiedFingerprint"]
     );
     assert_eq!(
         git(
@@ -227,7 +239,7 @@ fn failed_deterministic_check_records_evidence_and_stops_before_decision() {
 }
 
 #[test]
-fn unavailable_coding_tooling_is_explicit_and_stops_the_run() {
+fn unavailable_coding_tooling_stops_before_provider_launch() {
     let fixture = Fixture::new();
     let mut config = ProjectConfig::load(fixture.repository.path()).unwrap();
     config.execution.coding_tooling_executable = fixture
@@ -245,18 +257,122 @@ fn unavailable_coding_tooling_is_explicit_and_stops_the_run() {
         .unwrap();
 
     assert_eq!(run.status, LocalRunStatus::Failed);
-    assert_eq!(run.contract.checks.len(), 1);
-    assert_eq!(
-        run.contract.checks[0].outcome,
-        agent_loop_orchestrator::contracts::CheckOutcome::Unavailable
-    );
+    assert!(run.contract.candidates.is_empty());
+    assert!(run.contract.checks.is_empty());
     assert!(
-        run.contract.checks[0]
-            .reason
+        run.error
             .as_deref()
             .unwrap()
-            .contains("unavailable")
+            .contains("environment verification failed before provider launch")
     );
+    assert!(!run.worktree_path.exists());
+}
+
+#[test]
+fn failed_environment_receipt_stops_before_provider_launch_and_is_evidence() {
+    let fixture = Fixture::with_environment_script(
+        "exit 91",
+        PASSED_CHECK,
+        r#"printf '%s\n' '{"schemaVersion":1,"operation":"environment","status":"failed","durationMs":1,"data":{"action":"verify","fingerprintVersion":"environment-fingerprint-v1","profile":"default","expectedFingerprint":"env-v1:sha256:test","verifiedFingerprint":null},"diagnostics":[{"code":"environment-tool-version-mismatch","message":"wrong tool version"}]}'"#,
+    );
+    let mut service = ExecutionService::load(fixture.data.path()).unwrap();
+    let work_item = create_default_work_item(&fixture, &mut service);
+
+    let run = service
+        .run_work_item(&work_item.id, Provider::Codex, None, |_| {})
+        .unwrap();
+
+    assert_eq!(run.status, LocalRunStatus::Failed);
+    assert!(run.contract.candidates.is_empty());
+    assert!(run.contract.checks.is_empty());
+    assert!(
+        run.error
+            .as_deref()
+            .unwrap()
+            .contains("wrong tool version")
+    );
+    assert!(
+        run.contract.attempts[0]
+            .evidence
+            .iter()
+            .any(|evidence| evidence.kind == "environment-verification")
+    );
+    assert!(!run.worktree_path.exists());
+}
+
+#[test]
+fn malformed_environment_receipt_stops_before_provider_launch() {
+    let fixture = Fixture::with_environment_script("exit 91", PASSED_CHECK, "printf 'not-json\\n'");
+    let mut service = ExecutionService::load(fixture.data.path()).unwrap();
+    let work_item = create_default_work_item(&fixture, &mut service);
+
+    let run = service
+        .run_work_item(&work_item.id, Provider::Codex, None, |_| {})
+        .unwrap();
+
+    assert_eq!(run.status, LocalRunStatus::Failed);
+    assert!(run.contract.candidates.is_empty());
+    assert!(run.contract.checks.is_empty());
+    assert!(
+        run.error
+            .as_deref()
+            .unwrap()
+            .contains("parse coding-tooling environment verification receipt")
+    );
+}
+
+#[test]
+fn mismatched_verified_fingerprint_stops_before_provider_launch() {
+    let fixture = Fixture::with_environment_script(
+        "exit 91",
+        PASSED_CHECK,
+        r#"printf '%s\n' '{"schemaVersion":1,"operation":"environment","status":"passed","durationMs":1,"data":{"action":"verify","fingerprintVersion":"environment-fingerprint-v1","profile":"default","expectedFingerprint":"env-v1:sha256:expected","verifiedFingerprint":"env-v1:sha256:other"},"diagnostics":[]}'"#,
+    );
+    let mut service = ExecutionService::load(fixture.data.path()).unwrap();
+    let work_item = create_default_work_item(&fixture, &mut service);
+
+    let run = service
+        .run_work_item(&work_item.id, Provider::Codex, None, |_| {})
+        .unwrap();
+
+    assert_eq!(run.status, LocalRunStatus::Failed);
+    assert!(run.contract.candidates.is_empty());
+    assert!(run.contract.checks.is_empty());
+    assert!(
+        run.error
+            .as_deref()
+            .unwrap()
+            .contains("environment fingerprint mismatch")
+    );
+}
+
+#[test]
+fn source_development_profile_is_passed_to_environment_verification() {
+    let fixture = Fixture::new();
+    let mut config = ProjectConfig::load(fixture.repository.path()).unwrap();
+    config.execution.environment_profile = EnvironmentProfile::SourceDevelopment;
+    write_config(&fixture, &config);
+    let mut service = ExecutionService::load(fixture.data.path()).unwrap();
+    let work_item = create_default_work_item(&fixture, &mut service);
+
+    let run = service
+        .run_work_item(&work_item.id, Provider::Codex, None, |_| {})
+        .unwrap();
+
+    assert_eq!(run.status, LocalRunStatus::AwaitingDecision);
+    let receipt: serde_json::Value = serde_json::from_slice(
+        &fs::read(
+            fixture
+                .data
+                .path()
+                .join("runs")
+                .join(run.id.to_string())
+                .join("environment-verification.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(receipt["data"]["profile"], "source-development");
 }
 
 #[test]
@@ -643,6 +759,14 @@ impl Fixture {
     }
 
     fn with_scripts(provider_body: &str, tooling_body: &str) -> Self {
+        Self::with_environment_script(provider_body, tooling_body, PASSED_ENVIRONMENT_VERIFY)
+    }
+
+    fn with_environment_script(
+        provider_body: &str,
+        tooling_body: &str,
+        environment_body: &str,
+    ) -> Self {
         let data = tempfile::tempdir().unwrap();
         let repository = tempfile::tempdir().unwrap();
         git_ok(repository.path(), &["init", "-b", "main"]);
@@ -661,7 +785,12 @@ impl Fixture {
         let provider = data.path().join("fake-codex");
         executable(&provider, &format!("#!/bin/sh\n{provider_body}\n"));
         let tooling = data.path().join("fake-coding-tooling");
-        executable(&tooling, &format!("#!/bin/sh\n{tooling_body}\n"));
+        executable(
+            &tooling,
+            &format!(
+                "#!/bin/sh\nif [ \"${{1:-}}\" = \"environment\" ] && [ \"${{2:-}}\" = \"verify\" ]; then\n{environment_body}\nexit 0\nfi\n{tooling_body}\n"
+            ),
+        );
 
         let mut config = ProjectConfig::default_for("demo".into(), Provider::Codex);
         config.providers.codex.executable = provider.display().to_string();
