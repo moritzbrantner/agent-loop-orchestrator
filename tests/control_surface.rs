@@ -31,7 +31,8 @@ printf '%s\n' '{"type":"thread.started","thread_id":"fake-thread"}'
 
 const TOOLING: &str = r#"#!/bin/sh
 set -eu
-printf '%s\n' '{"schemaVersion":1,"operation":"run","status":"passed","durationMs":1,"data":{"results":[{"capability":"test","component":"fixture","status":"passed","exitCode":0,"durationMs":1}],"missing":[]},"diagnostics":[]}'
+candidate=$(git rev-parse HEAD)
+printf '{"schemaVersion":1,"checkId":"tests","capability":"test","candidate":{"kind":"git-commit","identity":"%s"},"outcome":"passed","required":true,"startedAt":"2026-08-20T20:00:00Z","finishedAt":"2026-08-20T20:00:01Z","exitCode":0,"evidence":[]}\n' "$candidate"
 "#;
 
 const BWRAP: &str = r#"#!/bin/sh
@@ -267,9 +268,6 @@ impl Fixture {
         Command::new(env!("CARGO_BIN_EXE_agent-loop"))
             .args(args)
             .current_dir(self.repository.path())
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_COMMON_DIR")
             .env("XDG_DATA_HOME", self.data.path())
             .env("HOME", self.data.path())
             .env("PATH", path)
