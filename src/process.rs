@@ -3,7 +3,7 @@ use std::{
     fs::{self, File},
     io::{BufRead, BufReader, BufWriter, Write},
     path::{Path, PathBuf},
-    process::{Command, ExitStatus, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{self, RecvTimeoutError},
@@ -12,13 +12,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use serde_json::Value;
 
 use crate::adapters::{AgentAdapter, Provider};
 
 const PLAYWRIGHT_CLI_SESSION_ENV: &str = "PLAYWRIGHT_CLI_SESSION";
+const PLAYWRIGHT_CLI_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone)]
 pub struct CommandSpec {
@@ -68,13 +69,32 @@ impl PlaywrightSessionGuard {
 
 impl Drop for PlaywrightSessionGuard {
     fn drop(&mut self) {
-        let _ = Command::new("playwright-cli")
+        let Ok(mut child) = Command::new("playwright-cli")
             .arg(format!("-s={}", self.name))
             .arg("close")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status();
+            .spawn()
+        else {
+            return;
+        };
+        wait_for_cleanup(&mut child, PLAYWRIGHT_CLI_CLEANUP_TIMEOUT);
+    }
+}
+
+fn wait_for_cleanup(child: &mut Child, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => return,
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return;
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(10)),
+        }
     }
 }
 
@@ -298,6 +318,29 @@ fn ensure_success(
 mod tests {
     use super::playwright_session_name;
     use std::path::Path;
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_timeout_terminates_stalled_process() {
+        use std::{
+            process::Command,
+            time::{Duration, Instant},
+        };
+
+        let mut child = Command::new("sh")
+            .args(["-c", "sleep 5"])
+            .spawn()
+            .expect("start stalled cleanup process");
+        let started = Instant::now();
+
+        super::wait_for_cleanup(&mut child, Duration::from_millis(10));
+
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "cleanup exceeded its time bound"
+        );
+        assert!(child.try_wait().unwrap().is_some());
+    }
 
     #[test]
     fn playwright_session_name_is_bound_to_attempt_directory() {
