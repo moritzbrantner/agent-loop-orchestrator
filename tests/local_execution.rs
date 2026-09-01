@@ -285,12 +285,7 @@ fn failed_environment_receipt_stops_before_provider_launch_and_is_evidence() {
     assert_eq!(run.status, LocalRunStatus::Failed);
     assert!(run.contract.candidates.is_empty());
     assert!(run.contract.checks.is_empty());
-    assert!(
-        run.error
-            .as_deref()
-            .unwrap()
-            .contains("wrong tool version")
-    );
+    assert!(run.error.as_deref().unwrap().contains("wrong tool version"));
     assert!(
         run.contract.attempts[0]
             .evidence
