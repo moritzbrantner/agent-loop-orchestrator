@@ -146,6 +146,8 @@ pub struct ExecutionConfig {
     pub coding_tooling_executable: String,
     pub check_tier: String,
     pub target_branch: String,
+    #[serde(default)]
+    pub environment_profile: EnvironmentProfile,
 }
 
 impl Default for ExecutionConfig {
@@ -154,6 +156,24 @@ impl Default for ExecutionConfig {
             coding_tooling_executable: "coding-tooling".into(),
             check_tier: "fast".into(),
             target_branch: "main".into(),
+            environment_profile: EnvironmentProfile::Default,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum EnvironmentProfile {
+    #[default]
+    Default,
+    SourceDevelopment,
+}
+
+impl EnvironmentProfile {
+    pub fn as_cli_value(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::SourceDevelopment => "source-development",
         }
     }
 }
@@ -520,6 +540,10 @@ mod tests {
         let decoded: ProjectConfig = toml::from_str(&encoded).unwrap();
         assert_eq!(decoded, config);
         assert_eq!(decoded.skills.profile, SkillProfile::Standard);
+        assert_eq!(
+            decoded.execution.environment_profile,
+            EnvironmentProfile::Default
+        );
         assert!(!encoded.contains("[paths]"));
         assert!(!encoded.contains("[reviews]"));
         assert!(!encoded.contains("[publication]"));
@@ -561,6 +585,19 @@ allowed_tools = []
         assert_eq!(config.skills, SkillsConfig::default());
         assert_eq!(config.publication, PublicationConfig::default());
         assert_eq!(config.queue, QueueConfig::default());
+    }
+
+    #[test]
+    fn source_development_environment_profile_round_trips() {
+        let mut config = ProjectConfig::default_for("demo".into(), Provider::Codex);
+        config.execution.environment_profile = EnvironmentProfile::SourceDevelopment;
+        let encoded = config.to_toml().unwrap();
+        let decoded: ProjectConfig = toml::from_str(&encoded).unwrap();
+        assert_eq!(
+            decoded.execution.environment_profile,
+            EnvironmentProfile::SourceDevelopment
+        );
+        assert!(encoded.contains("environment_profile = \"source-development\""));
     }
 
     #[test]
