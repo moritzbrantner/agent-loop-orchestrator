@@ -219,11 +219,13 @@ impl<'a> QueueRunner<'a> {
                     &store,
                     lock,
                     &state,
-                    QueueStopReason::ItemLimit,
-                    items_processed,
-                    events,
-                    blockers,
-                    usage,
+                    QueueReport {
+                        stop_reason: QueueStopReason::ItemLimit,
+                        items_processed,
+                        events,
+                        blockers,
+                        usage,
+                    },
                 );
             }
             blockers.clear();
@@ -296,11 +298,13 @@ impl<'a> QueueRunner<'a> {
                             &store,
                             lock,
                             &state,
-                            QueueStopReason::HardBlocker,
-                            items_processed,
-                            events,
-                            blockers,
-                            usage,
+                            QueueReport {
+                                stop_reason: QueueStopReason::HardBlocker,
+                                items_processed,
+                                events,
+                                blockers,
+                                usage,
+                            },
                         );
                     }
                     IntegrationResult::Repairable {
@@ -463,11 +467,13 @@ impl<'a> QueueRunner<'a> {
                             &store,
                             lock,
                             &state,
-                            QueueStopReason::HardBlocker,
-                            items_processed,
-                            events,
-                            blockers,
-                            usage,
+                            QueueReport {
+                                stop_reason: QueueStopReason::HardBlocker,
+                                items_processed,
+                                events,
+                                blockers,
+                                usage,
+                            },
                         );
                     }
                     QueueWorkResult::Repaired { .. } => {
@@ -488,11 +494,13 @@ impl<'a> QueueRunner<'a> {
                 &store,
                 lock,
                 &state,
-                stop_reason,
-                items_processed,
-                events,
-                blockers,
-                usage,
+                QueueReport {
+                    stop_reason,
+                    items_processed,
+                    events,
+                    blockers,
+                    usage,
+                },
             );
         }
     }
@@ -502,21 +510,11 @@ fn finish_report(
     store: &QueueStateStore,
     lock: File,
     state: &QueueState,
-    stop_reason: QueueStopReason,
-    items_processed: u32,
-    events: Vec<QueueEvent>,
-    blockers: Vec<QueueBlocker>,
-    usage: QueueUsage,
+    report: QueueReport,
 ) -> Result<QueueReport> {
     store.write(state)?;
     FileExt::unlock(&lock)?;
-    Ok(QueueReport {
-        stop_reason,
-        items_processed,
-        events,
-        blockers,
-        usage,
-    })
+    Ok(report)
 }
 
 fn pr_blocker(pull_request: &QueuePullRequest, reason: impl Into<String>) -> QueueBlocker {
