@@ -2068,7 +2068,17 @@ fn git_with_objects(
     candidate_object_directory: &Path,
     arguments: &[&str],
 ) -> Result<String> {
-    let common_directory = PathBuf::from(git(repository, &["rev-parse", "--git-common-dir"])?);
+    let common_directory = PathBuf::from(
+        git(repository, &["rev-parse", "--git-common-dir"]).with_context(|| {
+            format!(
+                "resolve candidate worktree Git metadata at {} (worktree exists: {}, marker exists: {}, candidate objects exist: {})",
+                repository.display(),
+                repository.exists(),
+                repository.join(".git").exists(),
+                candidate_object_directory.exists(),
+            )
+        })?,
+    );
     let common_directory = if common_directory.is_absolute() {
         common_directory
     } else {
