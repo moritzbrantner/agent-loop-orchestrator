@@ -29,6 +29,7 @@ const READY_LABEL: &str = "ready-for-agent";
 const ACTIVE_LABEL: &str = "agent-loop:active";
 const BLOCKED_LABEL: &str = "agent-loop:blocked";
 const READY_TO_MERGE_LABEL: &str = "agent-loop:ready-to-merge";
+const MAX_REPAIR_EVIDENCE_CHARS: usize = 8_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -122,6 +123,11 @@ pub enum QueueEvent {
         run_id: Option<Uuid>,
         reason: String,
     },
+    RepairSkippedNoInformationGain {
+        number: u64,
+        head_sha: String,
+        evidence_signature: String,
+    },
     IssuePublished {
         issue: u64,
         pull_request: u64,
@@ -148,6 +154,17 @@ pub struct QueueBlocker {
     pub reason: String,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueUsage {
+    pub integration_evaluations: u32,
+    pub provider_attempts: u32,
+    pub issue_attempts: u32,
+    pub repair_attempts: u32,
+    pub repair_limit_stops: u32,
+    pub no_information_gain_stops: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct QueueReport {
@@ -155,6 +172,8 @@ pub struct QueueReport {
     pub items_processed: u32,
     pub events: Vec<QueueEvent>,
     pub blockers: Vec<QueueBlocker>,
+    #[serde(default)]
+    pub usage: QueueUsage,
 }
 
 pub struct QueueRunner<'a> {
@@ -192,6 +211,7 @@ impl<'a> QueueRunner<'a> {
         let mut events = Vec::new();
         let mut blockers = Vec::new();
         let mut items_processed = 0;
+        let mut usage = QueueUsage::default();
 
         loop {
             if items_processed >= self.config.queue.max_items_per_run {
@@ -203,6 +223,7 @@ impl<'a> QueueRunner<'a> {
                     items_processed,
                     events,
                     blockers,
+                    usage,
                 );
             }
             blockers.clear();
@@ -248,6 +269,7 @@ impl<'a> QueueRunner<'a> {
                     ));
                     continue;
                 }
+                usage.integration_evaluations += 1;
                 match self.platform.integrate(&pull_request)? {
                     IntegrationResult::Merged => {
                         state.pull_requests.remove(&key);
@@ -278,15 +300,19 @@ impl<'a> QueueRunner<'a> {
                             items_processed,
                             events,
                             blockers,
+                            usage,
                         );
                     }
-                    IntegrationResult::Repairable { reason } => {
+                    IntegrationResult::Repairable {
+                        reason: integration_reason,
+                    } => {
                         let attempts = state
                             .pull_requests
                             .get(&key)
                             .context("queue pull request record disappeared")?
                             .repair_attempts;
                         if attempts >= self.config.queue.max_repair_attempts {
+                            usage.repair_limit_stops += 1;
                             blockers.push(pr_blocker(
                                 &pull_request,
                                 format!(
@@ -296,13 +322,42 @@ impl<'a> QueueRunner<'a> {
                             ));
                             continue;
                         }
+
+                        let integration_signature = evidence_signature(&integration_reason);
+                        let previous_failure = state
+                            .pull_requests
+                            .get(&key)
+                            .context("queue pull request record disappeared")?
+                            .last_failed_repair
+                            .clone();
+                        if previous_failure.as_ref().is_some_and(|previous| {
+                            previous.head_sha == pull_request.head_sha
+                                && previous.integration_signature == integration_signature
+                        }) {
+                            usage.no_information_gain_stops += 1;
+                            events.push(QueueEvent::RepairSkippedNoInformationGain {
+                                number: pull_request.number,
+                                head_sha: pull_request.head_sha.clone(),
+                                evidence_signature: integration_signature,
+                            });
+                            blockers.push(pr_blocker(
+                                &pull_request,
+                                "repair stopped because the same PR head produced materially unchanged integration evidence after the previous failed provider attempt",
+                            ));
+                            continue;
+                        }
+
                         state
                             .pull_requests
                             .get_mut(&key)
                             .context("queue pull request record disappeared")?
                             .repair_attempts += 1;
                         store.write(&state)?;
-                        let repair = self.worker.repair(&pull_request, &reason)?;
+                        let repair_context =
+                            build_repair_context(&integration_reason, previous_failure.as_ref());
+                        usage.provider_attempts += 1;
+                        usage.repair_attempts += 1;
+                        let repair = self.worker.repair(&pull_request, &repair_context)?;
                         items_processed += 1;
                         match repair {
                             QueueWorkResult::Repaired { run_id, head_sha } => {
@@ -311,6 +366,7 @@ impl<'a> QueueRunner<'a> {
                                     .get_mut(&key)
                                     .context("queue pull request record disappeared")?;
                                 record.last_published_sha = Some(head_sha.clone());
+                                record.last_failed_repair = None;
                                 store.write(&state)?;
                                 events.push(QueueEvent::PullRequestRepaired {
                                     number: pull_request.number,
@@ -328,12 +384,23 @@ impl<'a> QueueRunner<'a> {
                                     run_id,
                                     reason: reason.clone(),
                                 });
-                                let attempts = state
-                                    .pull_requests
-                                    .get(&key)
-                                    .context("queue pull request record disappeared")?
-                                    .repair_attempts;
+                                let attempts = {
+                                    let record = state
+                                        .pull_requests
+                                        .get_mut(&key)
+                                        .context("queue pull request record disappeared")?;
+                                    record.last_failed_repair = Some(FailedRepairEvidence {
+                                        head_sha: pull_request.head_sha.clone(),
+                                        integration_signature,
+                                        integration_reason: bounded_evidence(&integration_reason),
+                                        run_id,
+                                        failure_reason: bounded_evidence(&reason),
+                                    });
+                                    record.repair_attempts
+                                };
+                                store.write(&state)?;
                                 if attempts >= self.config.queue.max_repair_attempts {
+                                    usage.repair_limit_stops += 1;
                                     blockers.push(pr_blocker(&pull_request, reason));
                                 } else {
                                     progressed = true;
@@ -359,6 +426,8 @@ impl<'a> QueueRunner<'a> {
             let selection = select_issue(issues, self.platform)?;
             if let Some(issue) = selection.ready {
                 self.platform.mark_issue_active(&issue)?;
+                usage.provider_attempts += 1;
+                usage.issue_attempts += 1;
                 let result = self.worker.implement(&issue)?;
                 items_processed += 1;
                 match result {
@@ -398,6 +467,7 @@ impl<'a> QueueRunner<'a> {
                             items_processed,
                             events,
                             blockers,
+                            usage,
                         );
                     }
                     QueueWorkResult::Repaired { .. } => {
@@ -422,6 +492,7 @@ impl<'a> QueueRunner<'a> {
                 items_processed,
                 events,
                 blockers,
+                usage,
             );
         }
     }
@@ -435,6 +506,7 @@ fn finish_report(
     items_processed: u32,
     events: Vec<QueueEvent>,
     blockers: Vec<QueueBlocker>,
+    usage: QueueUsage,
 ) -> Result<QueueReport> {
     store.write(state)?;
     FileExt::unlock(&lock)?;
@@ -443,6 +515,7 @@ fn finish_report(
         items_processed,
         events,
         blockers,
+        usage,
     })
 }
 
@@ -452,6 +525,44 @@ fn pr_blocker(pull_request: &QueuePullRequest, reason: impl Into<String>) -> Que
         number: Some(pull_request.number),
         reason: reason.into(),
     }
+}
+
+fn build_repair_context(
+    integration_reason: &str,
+    previous_failure: Option<&FailedRepairEvidence>,
+) -> String {
+    let Some(previous) = previous_failure else {
+        return integration_reason.to_owned();
+    };
+    let previous_run = previous
+        .run_id
+        .map(|run_id| run_id.to_string())
+        .unwrap_or_else(|| "unavailable".into());
+    format!(
+        "{integration_reason}\n\nPrevious failed repair attempt on the same PR head:\n- head: {}\n- run: {previous_run}\n- previous integration evidence:\n{}\n- previous worker result:\n{}\n\nUse this as prior evidence; do not repeat investigation that it already settles.",
+        previous.head_sha, previous.integration_reason, previous.failure_reason
+    )
+}
+
+fn bounded_evidence(value: &str) -> String {
+    let mut chars = value.chars();
+    let mut bounded = chars
+        .by_ref()
+        .take(MAX_REPAIR_EVIDENCE_CHARS)
+        .collect::<String>();
+    if chars.next().is_some() {
+        bounded.push_str("\n...[truncated]");
+    }
+    bounded
+}
+
+fn evidence_signature(value: &str) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
 }
 
 struct IssueSelection {
@@ -536,6 +647,16 @@ struct QueueState {
     pull_requests: BTreeMap<String, PullRequestRecord>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FailedRepairEvidence {
+    head_sha: String,
+    integration_signature: String,
+    integration_reason: String,
+    run_id: Option<Uuid>,
+    failure_reason: String,
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PullRequestRecord {
@@ -545,6 +666,8 @@ struct PullRequestRecord {
     repair_attempts: u32,
     #[serde(default)]
     queue_owned: bool,
+    #[serde(default)]
+    last_failed_repair: Option<FailedRepairEvidence>,
     updated_at: Option<DateTime<Utc>>,
 }
 
@@ -554,6 +677,7 @@ impl PullRequestRecord {
             if self.last_published_sha.as_deref() != Some(&pull_request.head_sha) {
                 self.repair_attempts = 0;
             }
+            self.last_failed_repair = None;
             self.last_observed_sha = Some(pull_request.head_sha.clone());
             self.updated_at = Some(Utc::now());
         }
@@ -957,6 +1081,24 @@ impl LocalQueueWorker {
     }
 }
 
+fn issue_worker_prompt(issue: &QueueIssue) -> String {
+    format!(
+        "Implement GitHub issue #{} ({}). Preserve out-of-scope behavior and satisfy the issue acceptance criteria. Use the narrowest relevant repository-owned checks while iterating. The orchestrator will independently run the configured full completion gate on your committed candidate; run broader checks yourself only when their result is needed to diagnose the task. Leave a clean committed candidate. Do not push, publish, or merge.\n\nIssue: {}\n\n{}",
+        issue.number, issue.title, issue.url, issue.body
+    )
+}
+
+fn repair_worker_prompt(pull_request: &QueuePullRequest, repair_context: &str) -> String {
+    format!(
+        "Repair pull request #{} ({}) at exact head {} against base {}. Preserve its intended behavior and fix the integration failure below. Use the narrowest relevant repository-owned checks while iterating. The orchestrator will independently run the configured full completion gate on your committed candidate; run broader checks yourself only when their result is needed to diagnose the failure. Leave a clean committed candidate. Do not push, publish, or merge.\n\nIntegration evidence:\n{}",
+        pull_request.number,
+        pull_request.title,
+        pull_request.head_sha,
+        pull_request.base_ref,
+        repair_context
+    )
+}
+
 impl QueueWorker for LocalQueueWorker {
     fn implement(&mut self, issue: &QueueIssue) -> Result<QueueWorkResult> {
         let baseline_ref = format!(
@@ -975,10 +1117,7 @@ impl QueueWorker for LocalQueueWorker {
                 ),
             });
         }
-        let prompt = format!(
-            "Implement GitHub issue #{} ({}). Preserve out-of-scope behavior, satisfy the issue acceptance criteria, run the full repository-owned checks, and leave a clean committed candidate. Do not push, publish, or merge.\n\nIssue: {}\n\n{}",
-            issue.number, issue.title, issue.url, issue.body
-        );
+        let prompt = issue_worker_prompt(issue);
         let result = self.run_candidate(
             format!("Issue #{}: {}", issue.number, issue.title),
             prompt,
@@ -1066,14 +1205,7 @@ impl QueueWorker for LocalQueueWorker {
                 &observed,
             ],
         )?;
-        let prompt = format!(
-            "Repair pull request #{} ({}) at exact head {} against base {}. Preserve its intended behavior, fix the integration failure below, run the full repository-owned checks, and leave a clean committed candidate. Do not push, publish, or merge.\n\nIntegration failure:\n{}",
-            pull_request.number,
-            pull_request.title,
-            pull_request.head_sha,
-            pull_request.base_ref,
-            reason
-        );
+        let prompt = repair_worker_prompt(pull_request, reason);
         let result = self.run_candidate(
             format!("Repair PR #{}: {}", pull_request.number, pull_request.title),
             prompt,
@@ -1247,7 +1379,10 @@ fn classify_integration(envelope: &ToolingEnvelope) -> IntegrationResult {
     let reason = envelope
         .diagnostics
         .iter()
-        .map(|diagnostic| diagnostic.message.as_str())
+        .map(|diagnostic| match diagnostic.code.as_deref() {
+            Some(code) => format!("[{code}] {}", diagnostic.message),
+            None => diagnostic.message.clone(),
+        })
         .collect::<Vec<_>>()
         .join("\n");
     if codes.iter().any(|code| {
@@ -1339,6 +1474,20 @@ mod tests {
     use super::*;
     use crate::adapters::Provider;
 
+    fn sample_pull_request() -> QueuePullRequest {
+        QueuePullRequest {
+            number: 42,
+            title: "Change".into(),
+            url: "https://github.example/owner/demo/pull/42".into(),
+            author: "trusted".into(),
+            draft: false,
+            head_ref: "feature".into(),
+            head_sha: "a".repeat(40),
+            base_ref: "main".into(),
+            same_repository: true,
+        }
+    }
+
     #[test]
     fn issue_frontmatter_provides_scope_and_blockers() {
         let metadata = parse_issue_metadata(
@@ -1359,10 +1508,10 @@ mod tests {
                 message: "tests failed".into(),
             }],
         };
-        assert!(matches!(
-            classify_integration(&repair),
-            IntegrationResult::Repairable { .. }
-        ));
+        let IntegrationResult::Repairable { reason } = classify_integration(&repair) else {
+            panic!("expected repairable integration failure");
+        };
+        assert_eq!(reason, "[local-pipeline-not-green] tests failed");
         let blocked = ToolingEnvelope {
             status: "unavailable".into(),
             data: BTreeMap::new(),
@@ -1375,6 +1524,44 @@ mod tests {
             classify_integration(&blocked),
             IntegrationResult::Blocked { .. }
         ));
+    }
+
+    #[test]
+    fn worker_prompts_leave_the_full_completion_gate_to_the_orchestrator() {
+        let issue = QueueIssue {
+            number: 7,
+            title: "Fix it".into(),
+            body: "Acceptance criteria".into(),
+            url: "https://github.example/owner/demo/issues/7".into(),
+            labels: BTreeSet::new(),
+            scope: vec!["src/**".into()],
+            blocked_by: Vec::new(),
+        };
+        let issue_prompt = issue_worker_prompt(&issue);
+        assert!(issue_prompt.contains("narrowest relevant repository-owned checks"));
+        assert!(issue_prompt.contains("orchestrator will independently run"));
+        assert!(!issue_prompt.contains("run the full repository-owned checks"));
+
+        let repair_prompt = repair_worker_prompt(&sample_pull_request(), "tests failed");
+        assert!(repair_prompt.contains("narrowest relevant repository-owned checks"));
+        assert!(repair_prompt.contains("orchestrator will independently run"));
+        assert!(!repair_prompt.contains("run the full repository-owned checks"));
+    }
+
+    #[test]
+    fn prior_failed_repair_is_added_to_changed_evidence_context() {
+        let previous = FailedRepairEvidence {
+            head_sha: "a".repeat(40),
+            integration_signature: evidence_signature("tests failed"),
+            integration_reason: "tests failed".into(),
+            run_id: Some(Uuid::nil()),
+            failure_reason: "agent could not repair it".into(),
+        };
+        let context = build_repair_context("lint now fails", Some(&previous));
+        assert!(context.contains("lint now fails"));
+        assert!(context.contains("Previous failed repair attempt"));
+        assert!(context.contains("tests failed"));
+        assert!(context.contains("agent could not repair it"));
     }
 
     struct FakePlatform {
@@ -1426,6 +1613,7 @@ mod tests {
     #[derive(Default)]
     struct FailingWorker {
         repairs: usize,
+        reasons: Vec<String>,
     }
 
     impl QueueWorker for FailingWorker {
@@ -1436,9 +1624,10 @@ mod tests {
         fn repair(
             &mut self,
             _pull_request: &QueuePullRequest,
-            _reason: &str,
+            reason: &str,
         ) -> Result<QueueWorkResult> {
             self.repairs += 1;
+            self.reasons.push(reason.to_owned());
             Ok(QueueWorkResult::Failed {
                 run_id: None,
                 reason: "agent could not repair it".into(),
@@ -1447,25 +1636,22 @@ mod tests {
     }
 
     #[test]
-    fn queue_stops_after_two_failed_repairs_on_the_same_pull_request() {
+    fn queue_stops_on_unchanged_evidence_without_a_second_provider_attempt() {
         let data = TempDir::new().unwrap();
         let mut config = ProjectConfig::default_for("demo".into(), Provider::Codex);
         config.publication.mode = PublicationMode::PullRequest;
         config.queue.max_repair_attempts = 2;
         config.queue.trusted_authors = vec!["trusted".into()];
         let mut platform = FakePlatform {
-            pull_request: QueuePullRequest {
-                number: 42,
-                title: "Change".into(),
-                url: "https://github.example/owner/demo/pull/42".into(),
-                author: "trusted".into(),
-                draft: false,
-                head_ref: "feature".into(),
-                head_sha: "a".repeat(40),
-                base_ref: "main".into(),
-                same_repository: true,
-            },
-            integrations: VecDeque::new(),
+            pull_request: sample_pull_request(),
+            integrations: VecDeque::from([
+                IntegrationResult::Repairable {
+                    reason: "tests failed".into(),
+                },
+                IntegrationResult::Repairable {
+                    reason: "tests failed".into(),
+                },
+            ]),
             integration_calls: 0,
         };
         let mut worker = FailingWorker::default();
@@ -1480,17 +1666,92 @@ mod tests {
         .unwrap();
 
         assert_eq!(report.stop_reason, QueueStopReason::Blocked);
-        assert_eq!(report.items_processed, 2);
-        assert_eq!(worker.repairs, 2);
+        assert_eq!(report.items_processed, 1);
+        assert_eq!(worker.repairs, 1);
         assert_eq!(platform.integration_calls, 2);
+        assert_eq!(report.usage.integration_evaluations, 2);
+        assert_eq!(report.usage.provider_attempts, 1);
+        assert_eq!(report.usage.repair_attempts, 1);
+        assert_eq!(report.usage.no_information_gain_stops, 1);
+        assert_eq!(report.usage.repair_limit_stops, 0);
         assert_eq!(
             report
                 .events
                 .iter()
                 .filter(|event| matches!(event, QueueEvent::RepairFailed { .. }))
                 .count(),
-            2
+            1
         );
+        assert!(report.events.iter().any(|event| matches!(
+            event,
+            QueueEvent::RepairSkippedNoInformationGain { .. }
+        )));
+    }
+
+    #[test]
+    fn changed_integration_evidence_justifies_the_second_bounded_attempt() {
+        let data = TempDir::new().unwrap();
+        let mut config = ProjectConfig::default_for("demo".into(), Provider::Codex);
+        config.publication.mode = PublicationMode::PullRequest;
+        config.queue.max_repair_attempts = 2;
+        config.queue.trusted_authors = vec!["trusted".into()];
+        let mut platform = FakePlatform {
+            pull_request: sample_pull_request(),
+            integrations: VecDeque::from([
+                IntegrationResult::Repairable {
+                    reason: "tests failed".into(),
+                },
+                IntegrationResult::Repairable {
+                    reason: "lint now fails".into(),
+                },
+            ]),
+            integration_calls: 0,
+        };
+        let mut worker = FailingWorker::default();
+        let report = QueueRunner::new(
+            data.path(),
+            "owner/demo",
+            &config,
+            &mut platform,
+            &mut worker,
+        )
+        .run()
+        .unwrap();
+
+        assert_eq!(report.stop_reason, QueueStopReason::Blocked);
+        assert_eq!(worker.repairs, 2);
+        assert_eq!(platform.integration_calls, 2);
+        assert_eq!(report.usage.integration_evaluations, 2);
+        assert_eq!(report.usage.provider_attempts, 2);
+        assert_eq!(report.usage.repair_attempts, 2);
+        assert_eq!(report.usage.no_information_gain_stops, 0);
+        assert_eq!(report.usage.repair_limit_stops, 1);
+        assert!(worker.reasons[1].contains("lint now fails"));
+        assert!(worker.reasons[1].contains("Previous failed repair attempt"));
+        assert!(worker.reasons[1].contains("tests failed"));
+        assert!(worker.reasons[1].contains("agent could not repair it"));
+    }
+
+    #[test]
+    fn observing_a_new_head_invalidates_failed_repair_evidence() {
+        let mut record = PullRequestRecord {
+            last_observed_sha: Some("a".repeat(40)),
+            repair_attempts: 1,
+            last_failed_repair: Some(FailedRepairEvidence {
+                head_sha: "a".repeat(40),
+                integration_signature: evidence_signature("tests failed"),
+                integration_reason: "tests failed".into(),
+                run_id: None,
+                failure_reason: "agent failed".into(),
+            }),
+            ..PullRequestRecord::default()
+        };
+        let mut pull_request = sample_pull_request();
+        pull_request.head_sha = "b".repeat(40);
+        record.observe(&pull_request);
+        assert_eq!(record.repair_attempts, 0);
+        assert!(record.last_failed_repair.is_none());
+        assert_eq!(record.last_observed_sha, Some("b".repeat(40)));
     }
 
     #[derive(Default)]
@@ -1521,17 +1782,7 @@ mod tests {
         config.queue.max_items_per_run = 1;
         config.queue.trusted_authors = vec!["trusted".into()];
         let mut platform = FakePlatform {
-            pull_request: QueuePullRequest {
-                number: 42,
-                title: "Change".into(),
-                url: "https://github.example/owner/demo/pull/42".into(),
-                author: "trusted".into(),
-                draft: false,
-                head_ref: "feature".into(),
-                head_sha: "a".repeat(40),
-                base_ref: "main".into(),
-                same_repository: true,
-            },
+            pull_request: sample_pull_request(),
             integrations: VecDeque::from([
                 IntegrationResult::Repairable {
                     reason: "tests failed".into(),
@@ -1554,6 +1805,9 @@ mod tests {
         assert_eq!(report.stop_reason, QueueStopReason::ItemLimit);
         assert_eq!(report.items_processed, 1);
         assert_eq!(platform.integration_calls, 1);
+        assert_eq!(report.usage.integration_evaluations, 1);
+        assert_eq!(report.usage.provider_attempts, 1);
+        assert_eq!(report.usage.repair_attempts, 1);
         assert!(matches!(
             report.events.as_slice(),
             [QueueEvent::PullRequestRepaired { .. }]
