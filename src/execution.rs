@@ -349,6 +349,19 @@ impl ExecutionService {
 
         let provider_adapter = adapter(provider);
         let candidate_object_directory = run_directory.join("candidate-objects");
+        if let Err(error) = fs::create_dir_all(&candidate_object_directory).with_context(|| {
+            format!(
+                "create candidate object directory {}",
+                candidate_object_directory.display()
+            )
+        }) {
+            let message = failure_with_cleanup(
+                &work_item.repository_root,
+                &worktree_path,
+                error.to_string(),
+            );
+            return self.finish_failed(run, &run_directory, message);
+        }
         let provider_prompt = format!(
             "Implement the work described by this canonical agent.task-packet/v1. Leave the worktree clean and commit the completed candidate. You have no authority to integrate, push, publish, or otherwise mutate a remote system.\n\n{}",
             serde_json::to_string_pretty(&packet)?
