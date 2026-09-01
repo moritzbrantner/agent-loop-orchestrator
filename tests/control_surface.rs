@@ -26,11 +26,6 @@ else
 fi
 git add greeting.txt
 git commit -m 'candidate' >/dev/null
-printf 'provider-pwd=%s\n' "$PWD" >&2
-git rev-parse --absolute-git-dir >&2
-git rev-parse --git-common-dir >&2
-git rev-parse HEAD >&2
-env | sort | sed -n '/^GIT_/p' >&2
 printf '%s\n' '{"type":"thread.started","thread_id":"fake-thread"}'
 "#;
 
