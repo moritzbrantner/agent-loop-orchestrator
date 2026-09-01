@@ -2096,8 +2096,12 @@ fn git_with_objects(
         .with_context(|| format!("run git {}", arguments.join(" ")))?;
     if !output.status.success() {
         bail!(
-            "git {} failed: {}",
+            "git {} failed in {} (worktree marker exists: {}, candidate objects exist: {}, common objects exist: {}): {}",
             arguments.join(" "),
+            repository.display(),
+            repository.join(".git").exists(),
+            candidate_object_directory.exists(),
+            common_directory.join("objects").exists(),
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
