@@ -31,6 +31,11 @@ printf '%s\n' '{"type":"thread.started","thread_id":"fake-thread"}'
 
 const TOOLING: &str = r#"#!/bin/sh
 set -eu
+if [ "${1:-}" = "environment" ] && [ "${2:-}" = "verify" ]; then
+  profile=${4:-default}
+  printf '{"schemaVersion":1,"operation":"environment","status":"passed","durationMs":1,"data":{"action":"verify","fingerprintVersion":"environment-fingerprint-v1","profile":"%s","expectedFingerprint":"env-v1:sha256:control","verifiedFingerprint":"env-v1:sha256:control"},"diagnostics":[]}\n' "$profile"
+  exit 0
+fi
 candidate=$(git rev-parse HEAD)
 printf '{"schemaVersion":1,"checkId":"tests","capability":"test","candidate":{"kind":"git-commit","identity":"%s"},"outcome":"passed","required":true,"startedAt":"2026-08-20T20:00:00Z","finishedAt":"2026-08-20T20:00:01Z","exitCode":0,"evidence":[]}\n' "$candidate"
 "#;
