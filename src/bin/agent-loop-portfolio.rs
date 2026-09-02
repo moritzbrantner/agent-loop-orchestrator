@@ -23,7 +23,6 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    agent_loop_orchestrator::environment::activate_registered_tools()?;
     let report = agent_loop_orchestrator::portfolio::collect_findings(&args.root, args.limit)?;
     if let Some(output) = args.output.as_deref() {
         agent_loop_orchestrator::portfolio::write_findings_report(output, &report)?;
