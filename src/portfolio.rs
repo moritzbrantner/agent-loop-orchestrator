@@ -22,12 +22,25 @@ pub struct PortfolioFindingsOptions {
 
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PortfolioCoverageSummary {
+    pub repositories_with_coverage: usize,
+    pub repositories_with_unsupported_technologies: usize,
+    pub repositories_without_coverage_metadata: usize,
+    pub covered_clean_repositories: usize,
+    pub unsupported_zero_finding_repositories: usize,
+    pub technologies: BTreeMap<String, usize>,
+    pub unsupported_technologies: BTreeMap<String, usize>,
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PortfolioFindingsSummary {
     pub repositories_with_findings: usize,
     pub repository_statuses: BTreeMap<String, usize>,
     pub severities: BTreeMap<String, usize>,
     pub states: BTreeMap<String, usize>,
     pub expectations: BTreeMap<String, usize>,
+    pub coverage: PortfolioCoverageSummary,
 }
 
 #[derive(Debug, Serialize)]
@@ -50,6 +63,7 @@ pub struct RepositoryFindings {
     pub status: String,
     pub exit_code: Option<i32>,
     pub counts: Value,
+    pub coverage: Value,
     pub findings: Vec<Value>,
     pub diagnostics: Vec<String>,
 }
@@ -146,6 +160,10 @@ fn parse_findings_output(
                 .pointer("/data/counts")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
+            let coverage = envelope
+                .pointer("/data/coverage")
+                .cloned()
+                .unwrap_or(Value::Null);
             let findings = envelope
                 .pointer("/data/findings")
                 .and_then(Value::as_array)
@@ -173,6 +191,7 @@ fn parse_findings_output(
                 status,
                 exit_code,
                 counts,
+                coverage,
                 findings,
                 diagnostics,
             }
@@ -189,6 +208,7 @@ fn parse_findings_output(
                 status: "error".into(),
                 exit_code,
                 counts: json!({}),
+                coverage: Value::Null,
                 findings: Vec::new(),
                 diagnostics,
             }
@@ -221,6 +241,7 @@ fn collect_repository(
             status: "unavailable".into(),
             exit_code: None,
             counts: json!({}),
+            coverage: Value::Null,
             findings: Vec::new(),
             diagnostics: vec![format!("failed to execute {}: {error}", tool.label)],
         },
@@ -236,6 +257,37 @@ fn string_field<'a>(finding: &'a Value, name: &str, fallback: &'a str) -> &'a st
         .get(name)
         .and_then(Value::as_str)
         .unwrap_or(fallback)
+}
+
+fn string_array<'a>(value: &'a Value, pointer: &str) -> Vec<&'a str> {
+    value
+        .pointer(pointer)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect()
+}
+
+fn has_unavailable_detector(coverage: &Value) -> bool {
+    coverage
+        .get("detectors")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|detector| detector.get("status").and_then(Value::as_str) == Some("unavailable"))
+}
+
+fn has_coverage_metadata(repository: &RepositoryFindings) -> bool {
+    repository.coverage.is_object()
+}
+
+fn has_coverage_gap(repository: &RepositoryFindings) -> bool {
+    if !has_coverage_metadata(repository) {
+        return true;
+    }
+    !string_array(&repository.coverage, "/unsupportedTechnologies").is_empty()
+        || has_unavailable_detector(&repository.coverage)
 }
 
 fn summarize_repositories(repositories: &[RepositoryFindings]) -> PortfolioFindingsSummary {
@@ -258,6 +310,34 @@ fn summarize_repositories(repositories: &[RepositoryFindings]) -> PortfolioFindi
                 &mut summary.expectations,
                 string_field(finding, "expectationId", "unknown"),
             );
+        }
+
+        if !has_coverage_metadata(repository) {
+            summary.coverage.repositories_without_coverage_metadata += 1;
+            continue;
+        }
+
+        summary.coverage.repositories_with_coverage += 1;
+        for technology in string_array(&repository.coverage, "/technologies") {
+            increment(&mut summary.coverage.technologies, technology);
+        }
+        let unsupported = string_array(&repository.coverage, "/unsupportedTechnologies");
+        if !unsupported.is_empty() {
+            summary.coverage.repositories_with_unsupported_technologies += 1;
+            for technology in unsupported {
+                increment(&mut summary.coverage.unsupported_technologies, technology);
+            }
+        }
+
+        if repository.findings.is_empty()
+            && repository.diagnostics.is_empty()
+            && repository.status == "passed"
+        {
+            if has_coverage_gap(repository) {
+                summary.coverage.unsupported_zero_finding_repositories += 1;
+            } else {
+                summary.coverage.covered_clean_repositories += 1;
+            }
         }
     }
     summary
@@ -376,6 +456,24 @@ pub fn render_markdown_report(
         report.summary.repositories_with_findings
     ));
     output.push_str(&format!(
+        "Covered-clean repositories: {}  \n",
+        report.summary.coverage.covered_clean_repositories
+    ));
+    output.push_str(&format!(
+        "Zero-finding repositories with coverage gaps: {}  \n",
+        report
+            .summary
+            .coverage
+            .unsupported_zero_finding_repositories
+    ));
+    output.push_str(&format!(
+        "Repositories missing coverage metadata: {}  \n",
+        report
+            .summary
+            .coverage
+            .repositories_without_coverage_metadata
+    ));
+    output.push_str(&format!(
         "Scope: {} findings.\n\n",
         if report.new_only {
             "new-only"
@@ -392,10 +490,23 @@ pub fn render_markdown_report(
     append_count_table(&mut output, "Severity", &report.summary.severities);
     append_count_table(&mut output, "Finding state", &report.summary.states);
     append_count_table(&mut output, "Expectation", &report.summary.expectations);
+    append_count_table(
+        &mut output,
+        "Detected technologies",
+        &report.summary.coverage.technologies,
+    );
+    append_count_table(
+        &mut output,
+        "Unsupported analysis technologies",
+        &report.summary.coverage.unsupported_technologies,
+    );
 
     output.push_str("## Repository details\n\n");
     for repository in &report.repositories {
-        if repository.findings.is_empty() && repository.diagnostics.is_empty() {
+        if repository.findings.is_empty()
+            && repository.diagnostics.is_empty()
+            && !has_coverage_gap(repository)
+        {
             continue;
         }
         output.push_str(&format!(
@@ -407,6 +518,38 @@ pub fn render_markdown_report(
             markdown_text(&repository.status),
             repository.findings.len()
         ));
+
+        if !has_coverage_metadata(repository) {
+            output.push_str("Coverage: metadata unavailable.\n\n");
+        } else {
+            let technologies = string_array(&repository.coverage, "/technologies");
+            if !technologies.is_empty() {
+                output.push_str(&format!(
+                    "Technologies: {}.\n\n",
+                    technologies
+                        .iter()
+                        .map(|value| format!("`{}`", markdown_text(value)))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            let unsupported = string_array(&repository.coverage, "/unsupportedTechnologies");
+            if !unsupported.is_empty() {
+                output.push_str(&format!(
+                    "Coverage gaps: {}.\n\n",
+                    unsupported
+                        .iter()
+                        .map(|value| format!("`{}`", markdown_text(value)))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            if has_unavailable_detector(&repository.coverage) {
+                output.push_str(
+                    "Coverage gaps: one or more detector coverage rules are unavailable.\n\n",
+                );
+            }
+        }
 
         if !repository.diagnostics.is_empty() {
             output.push_str("Diagnostics:\n\n");
@@ -485,6 +628,24 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    fn covered_coverage(technologies: &[&str]) -> Value {
+        json!({
+            "schemaVersion": 1,
+            "technologies": technologies,
+            "detectors": [{ "id": "source-debt-marker", "status": "applied" }],
+            "unsupportedTechnologies": []
+        })
+    }
+
+    fn unsupported_coverage(technologies: &[&str], unsupported: &[&str]) -> Value {
+        json!({
+            "schemaVersion": 1,
+            "technologies": technologies,
+            "detectors": [{ "id": "source-debt-marker", "status": "applied" }],
+            "unsupportedTechnologies": unsupported
+        })
+    }
+
     #[test]
     fn discovers_only_git_repositories_in_stable_order() {
         let root = tempdir().unwrap();
@@ -503,13 +664,19 @@ mod tests {
     }
 
     #[test]
-    fn preserves_findings_and_blocking_exit_codes_from_valid_json() {
+    fn preserves_findings_coverage_and_blocking_exit_codes_from_valid_json() {
         let root = tempdir().unwrap();
         let envelope = json!({
             "schemaVersion": 1,
             "status": "failed",
             "data": {
                 "counts": { "total": 1, "error": 1 },
+                "coverage": {
+                    "schemaVersion": 1,
+                    "technologies": ["typescript"],
+                    "detectors": [],
+                    "unsupportedTechnologies": []
+                },
                 "findings": [{
                     "id": "CT-ABCDEF012345",
                     "expectationId": "source-unimplemented-stub",
@@ -530,10 +697,14 @@ mod tests {
         assert_eq!(parsed.status, "failed");
         assert_eq!(parsed.exit_code, Some(1));
         assert_eq!(parsed.findings.len(), 1);
+        assert_eq!(
+            string_array(&parsed.coverage, "/technologies"),
+            ["typescript"]
+        );
     }
 
     #[test]
-    fn summarizes_status_severity_state_and_expectation_counts() {
+    fn summarizes_findings_and_coverage_without_treating_unsupported_as_clean() {
         let repositories = vec![
             RepositoryFindings {
                 repository: "alpha".into(),
@@ -541,20 +712,27 @@ mod tests {
                 status: "passed".into(),
                 exit_code: Some(0),
                 counts: json!({}),
-                findings: vec![json!({
-                    "id": "CT-AAAAAAAAAAAA",
-                    "expectationId": "source-debt-marker",
-                    "severity": "info",
-                    "state": "baseline"
-                })],
+                coverage: covered_coverage(&["typescript"]),
+                findings: vec![],
                 diagnostics: vec![],
             },
             RepositoryFindings {
                 repository: "beta".into(),
                 path: "/tmp/beta".into(),
+                status: "passed".into(),
+                exit_code: Some(0),
+                counts: json!({}),
+                coverage: unsupported_coverage(&["rust"], &["rust"]),
+                findings: vec![],
+                diagnostics: vec![],
+            },
+            RepositoryFindings {
+                repository: "gamma".into(),
+                path: "/tmp/gamma".into(),
                 status: "failed".into(),
                 exit_code: Some(1),
                 counts: json!({}),
+                coverage: covered_coverage(&["typescript"]),
                 findings: vec![json!({
                     "id": "CT-BBBBBBBBBBBB",
                     "expectationId": "source-unimplemented-stub",
@@ -563,28 +741,54 @@ mod tests {
                 })],
                 diagnostics: vec![],
             },
+            RepositoryFindings {
+                repository: "legacy".into(),
+                path: "/tmp/legacy".into(),
+                status: "passed".into(),
+                exit_code: Some(0),
+                counts: json!({}),
+                coverage: Value::Null,
+                findings: vec![],
+                diagnostics: vec![],
+            },
         ];
 
         let summary = summarize_repositories(&repositories);
 
-        assert_eq!(summary.repositories_with_findings, 2);
-        assert_eq!(summary.repository_statuses.get("passed"), Some(&1));
+        assert_eq!(summary.repositories_with_findings, 1);
+        assert_eq!(summary.repository_statuses.get("passed"), Some(&3));
         assert_eq!(summary.repository_statuses.get("failed"), Some(&1));
-        assert_eq!(summary.severities.get("info"), Some(&1));
         assert_eq!(summary.severities.get("error"), Some(&1));
         assert_eq!(summary.states.get("new"), Some(&1));
-        assert_eq!(summary.states.get("baseline"), Some(&1));
-        assert_eq!(summary.expectations.get("source-debt-marker"), Some(&1));
+        assert_eq!(
+            summary.expectations.get("source-unimplemented-stub"),
+            Some(&1)
+        );
+        assert_eq!(summary.coverage.repositories_with_coverage, 3);
+        assert_eq!(summary.coverage.repositories_without_coverage_metadata, 1);
+        assert_eq!(
+            summary.coverage.repositories_with_unsupported_technologies,
+            1
+        );
+        assert_eq!(summary.coverage.covered_clean_repositories, 1);
+        assert_eq!(summary.coverage.unsupported_zero_finding_repositories, 1);
+        assert_eq!(summary.coverage.technologies.get("typescript"), Some(&2));
+        assert_eq!(summary.coverage.technologies.get("rust"), Some(&1));
+        assert_eq!(
+            summary.coverage.unsupported_technologies.get("rust"),
+            Some(&1)
+        );
     }
 
     #[test]
-    fn markdown_prioritizes_errors_and_keeps_full_json_separate() {
-        let repository = RepositoryFindings {
+    fn markdown_prioritizes_errors_and_surfaces_zero_finding_coverage_gaps() {
+        let error_repository = RepositoryFindings {
             repository: "alpha".into(),
             path: "/tmp/alpha".into(),
             status: "passed".into(),
             exit_code: Some(0),
             counts: json!({}),
+            coverage: covered_coverage(&["typescript"]),
             findings: vec![
                 json!({
                     "id": "CT-AAAAAAAAAAAA",
@@ -605,14 +809,25 @@ mod tests {
             ],
             diagnostics: vec![],
         };
+        let unsupported_repository = RepositoryFindings {
+            repository: "rust-zero".into(),
+            path: "/tmp/rust-zero".into(),
+            status: "passed".into(),
+            exit_code: Some(0),
+            counts: json!({}),
+            coverage: unsupported_coverage(&["rust"], &["rust"]),
+            findings: vec![],
+            diagnostics: vec![],
+        };
+        let repositories = vec![error_repository, unsupported_repository];
         let report = PortfolioFindingsReport {
             schema_version: 1,
             root: "/tmp".into(),
-            repository_count: 1,
+            repository_count: repositories.len(),
             finding_count: 2,
             new_only: false,
-            summary: summarize_repositories(std::slice::from_ref(&repository)),
-            repositories: vec![repository],
+            summary: summarize_repositories(&repositories),
+            repositories,
         };
 
         let markdown = render_markdown_report(&report, 1);
@@ -620,14 +835,18 @@ mod tests {
         assert!(markdown.find("CT-BBBBBBBBBBBB").unwrap() < markdown.find("omitted").unwrap());
         assert!(!markdown.contains("CT-AAAAAAAAAAAA"));
         assert!(markdown.contains("1 more finding(s) omitted"));
+        assert!(markdown.contains("### rust-zero"));
+        assert!(markdown.contains("Coverage gaps: `rust`."));
+        assert!(markdown.contains("Zero-finding repositories with coverage gaps: 1"));
     }
 
     #[test]
-    fn turns_invalid_tool_output_into_repository_diagnostics() {
+    fn turns_invalid_tool_output_into_repository_diagnostics_and_missing_coverage() {
         let root = tempdir().unwrap();
         let parsed = parse_findings_output(root.path(), Some(2), b"not-json", b"tool failed");
 
         assert_eq!(parsed.status, "error");
+        assert!(parsed.coverage.is_null());
         assert!(parsed.findings.is_empty());
         assert!(
             parsed
