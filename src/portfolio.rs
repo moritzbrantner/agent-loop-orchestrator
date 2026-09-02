@@ -1,5 +1,7 @@
 use std::{
-    env, fs,
+    env,
+    ffi::{OsStr, OsString},
+    fs,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -7,6 +9,8 @@ use std::{
 use anyhow::{Context, Result};
 use serde::Serialize;
 use serde_json::{Value, json};
+
+use crate::environment;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,6 +32,13 @@ pub struct RepositoryFindings {
     pub counts: Value,
     pub findings: Vec<Value>,
     pub diagnostics: Vec<String>,
+}
+
+#[derive(Debug)]
+struct CodingToolingInvocation {
+    executable: PathBuf,
+    prefix_args: Vec<OsString>,
+    label: String,
 }
 
 fn repository_name(path: &Path) -> String {
@@ -57,6 +68,44 @@ pub fn discover_repositories(root: &Path) -> Result<Vec<PathBuf>> {
     repositories.sort_by_key(|path| repository_name(path));
     repositories.dedup();
     Ok(repositories)
+}
+
+fn resolve_coding_tooling() -> Result<CodingToolingInvocation> {
+    if let Some(executable) = env::var_os("CODING_TOOLING_BIN") {
+        let executable = PathBuf::from(executable);
+        return Ok(CodingToolingInvocation {
+            label: executable.display().to_string(),
+            executable,
+            prefix_args: Vec::new(),
+        });
+    }
+
+    if let Some(executable) = environment::find_on_path(OsStr::new("coding-tooling")) {
+        return Ok(CodingToolingInvocation {
+            label: executable.display().to_string(),
+            executable,
+            prefix_args: Vec::new(),
+        });
+    }
+
+    if let Some(registry) = environment::load_default()? {
+        if let Some(component) = registry.components.get("coding-tooling") {
+            let entrypoint = component.path.join("src").join("entry.ts");
+            if entrypoint.is_file() {
+                return Ok(CodingToolingInvocation {
+                    executable: PathBuf::from("bun"),
+                    prefix_args: vec![entrypoint.as_os_str().to_owned()],
+                    label: format!("bun {}", entrypoint.display()),
+                });
+            }
+        }
+    }
+
+    Ok(CodingToolingInvocation {
+        executable: PathBuf::from("coding-tooling"),
+        prefix_args: Vec::new(),
+        label: "coding-tooling".into(),
+    })
 }
 
 fn parse_findings_output(
@@ -127,12 +176,14 @@ fn parse_findings_output(
     }
 }
 
-fn collect_repository(tool: &Path, repository: &Path) -> RepositoryFindings {
-    match Command::new(tool)
+fn collect_repository(tool: &CodingToolingInvocation, repository: &Path) -> RepositoryFindings {
+    let mut command = Command::new(&tool.executable);
+    command
+        .args(&tool.prefix_args)
         .args(["findings", "--json"])
-        .current_dir(repository)
-        .output()
-    {
+        .current_dir(repository);
+
+    match command.output() {
         Ok(output) => parse_findings_output(
             repository,
             output.status.code(),
@@ -146,7 +197,7 @@ fn collect_repository(tool: &Path, repository: &Path) -> RepositoryFindings {
             exit_code: None,
             counts: json!({}),
             findings: Vec::new(),
-            diagnostics: vec![format!("failed to execute {}: {error}", tool.display())],
+            diagnostics: vec![format!("failed to execute {}: {error}", tool.label)],
         },
     }
 }
@@ -154,9 +205,7 @@ fn collect_repository(tool: &Path, repository: &Path) -> RepositoryFindings {
 pub fn collect_findings(root: &Path, limit: Option<usize>) -> Result<PortfolioFindingsReport> {
     let root = fs::canonicalize(root)
         .with_context(|| format!("portfolio root {} is unavailable", root.display()))?;
-    let tool = env::var_os("CODING_TOOLING_BIN")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("coding-tooling"));
+    let tool = resolve_coding_tooling()?;
     let mut repositories = discover_repositories(&root)?;
     if let Some(limit) = limit {
         repositories.truncate(limit);
