@@ -232,7 +232,10 @@ fn increment(map: &mut BTreeMap<String, usize>, key: &str) {
 }
 
 fn string_field<'a>(finding: &'a Value, name: &str, fallback: &'a str) -> &'a str {
-    finding.get(name).and_then(Value::as_str).unwrap_or(fallback)
+    finding
+        .get(name)
+        .and_then(Value::as_str)
+        .unwrap_or(fallback)
 }
 
 fn summarize_repositories(repositories: &[RepositoryFindings]) -> PortfolioFindingsSummary {
@@ -362,8 +365,14 @@ pub fn render_markdown_report(
 ) -> String {
     let mut output = String::new();
     output.push_str("# Repository gap report\n\n");
-    output.push_str(&format!("Portfolio root: `{}`  \n", markdown_text(&report.root)));
-    output.push_str(&format!("Repositories scanned: {}  \n", report.repository_count));
+    output.push_str(&format!(
+        "Portfolio root: `{}`  \n",
+        markdown_text(&report.root)
+    ));
+    output.push_str(&format!(
+        "Repositories scanned: {}  \n",
+        report.repository_count
+    ));
     output.push_str(&format!("Findings: {}  \n", report.finding_count));
     output.push_str(&format!(
         "Repositories with findings: {}  \n",
@@ -371,7 +380,11 @@ pub fn render_markdown_report(
     ));
     output.push_str(&format!(
         "Scope: {} findings.\n\n",
-        if report.new_only { "new-only" } else { "all active" }
+        if report.new_only {
+            "new-only"
+        } else {
+            "all active"
+        }
     ));
 
     append_count_table(
@@ -388,7 +401,10 @@ pub fn render_markdown_report(
         if repository.findings.is_empty() && repository.diagnostics.is_empty() {
             continue;
         }
-        output.push_str(&format!("### {}\n\n", markdown_text(&repository.repository)));
+        output.push_str(&format!(
+            "### {}\n\n",
+            markdown_text(&repository.repository)
+        ));
         output.push_str(&format!(
             "Status: `{}`; findings: {}.\n\n",
             markdown_text(&repository.status),
@@ -409,8 +425,11 @@ pub fn render_markdown_report(
                 .cmp(&severity_rank(right))
                 .then_with(|| state_rank(left).cmp(&state_rank(right)))
                 .then_with(|| {
-                    string_field(left, "expectationId", "")
-                        .cmp(string_field(right, "expectationId", ""))
+                    string_field(left, "expectationId", "").cmp(string_field(
+                        right,
+                        "expectationId",
+                        "",
+                    ))
                 })
                 .then_with(|| string_field(left, "id", "").cmp(string_field(right, "id", "")))
         });
@@ -456,7 +475,12 @@ pub fn write_markdown_report(
         path,
         render_markdown_report(report, max_findings_per_repository),
     )
-    .with_context(|| format!("failed to write portfolio Markdown report {}", path.display()))
+    .with_context(|| {
+        format!(
+            "failed to write portfolio Markdown report {}",
+            path.display()
+        )
+    })
 }
 
 #[cfg(test)]
