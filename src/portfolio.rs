@@ -259,7 +259,7 @@ fn string_field<'a>(finding: &'a Value, name: &str, fallback: &'a str) -> &'a st
         .unwrap_or(fallback)
 }
 
-fn string_array(value: &Value, pointer: &str) -> Vec<&str> {
+fn string_array<'a>(value: &'a Value, pointer: &str) -> Vec<&'a str> {
     value
         .pointer(pointer)
         .and_then(Value::as_array)
