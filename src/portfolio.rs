@@ -59,7 +59,12 @@ pub fn discover_repositories(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(repositories)
 }
 
-fn parse_findings_output(path: &Path, exit_code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> RepositoryFindings {
+fn parse_findings_output(
+    path: &Path,
+    exit_code: Option<i32>,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> RepositoryFindings {
     let repository = repository_name(path);
     match serde_json::from_slice::<Value>(stdout) {
         Ok(envelope) => {
@@ -175,7 +180,10 @@ pub fn collect_findings(root: &Path, limit: Option<usize>) -> Result<PortfolioFi
 }
 
 pub fn write_findings_report(path: &Path, report: &PortfolioFindingsReport) -> Result<()> {
-    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create report directory {}", parent.display()))?;
     }
@@ -237,7 +245,17 @@ mod tests {
 
         assert_eq!(parsed.status, "error");
         assert!(parsed.findings.is_empty());
-        assert!(parsed.diagnostics.iter().any(|value| value.contains("invalid JSON")));
-        assert!(parsed.diagnostics.iter().any(|value| value.contains("tool failed")));
+        assert!(
+            parsed
+                .diagnostics
+                .iter()
+                .any(|value| value.contains("invalid JSON"))
+        );
+        assert!(
+            parsed
+                .diagnostics
+                .iter()
+                .any(|value| value.contains("tool failed"))
+        );
     }
 }
