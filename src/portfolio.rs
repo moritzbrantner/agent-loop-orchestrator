@@ -54,7 +54,7 @@ pub fn discover_repositories(root: &Path) -> Result<Vec<PathBuf>> {
         }
     }
 
-    repositories.sort_by(|left, right| repository_name(left).cmp(&repository_name(right)));
+    repositories.sort_by_key(|path| repository_name(path));
     repositories.dedup();
     Ok(repositories)
 }
