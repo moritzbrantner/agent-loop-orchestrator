@@ -323,10 +323,7 @@ pub fn write_findings_report(path: &Path, report: &PortfolioFindingsReport) -> R
 }
 
 fn markdown_text(value: &str) -> String {
-    value
-        .replace('\n', " ")
-        .replace('\r', " ")
-        .replace('|', "\\|")
+    value.replace(['\n', '\r'], " ").replace('|', "\\|")
 }
 
 fn severity_rank(value: &Value) -> u8 {
