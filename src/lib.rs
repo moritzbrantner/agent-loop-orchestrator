@@ -7,6 +7,7 @@ pub mod control;
 pub mod doctor;
 pub mod environment;
 pub mod execution;
+pub mod portfolio;
 pub mod process;
 pub mod publication;
 pub mod queue;
