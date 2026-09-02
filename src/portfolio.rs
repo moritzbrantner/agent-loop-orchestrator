@@ -461,11 +461,17 @@ pub fn render_markdown_report(
     ));
     output.push_str(&format!(
         "Zero-finding repositories with coverage gaps: {}  \n",
-        report.summary.coverage.unsupported_zero_finding_repositories
+        report
+            .summary
+            .coverage
+            .unsupported_zero_finding_repositories
     ));
     output.push_str(&format!(
         "Repositories missing coverage metadata: {}  \n",
-        report.summary.coverage.repositories_without_coverage_metadata
+        report
+            .summary
+            .coverage
+            .repositories_without_coverage_metadata
     ));
     output.push_str(&format!(
         "Scope: {} findings.\n\n",
@@ -539,7 +545,9 @@ pub fn render_markdown_report(
                 ));
             }
             if has_unavailable_detector(&repository.coverage) {
-                output.push_str("Coverage gaps: one or more detector coverage rules are unavailable.\n\n");
+                output.push_str(
+                    "Coverage gaps: one or more detector coverage rules are unavailable.\n\n",
+                );
             }
         }
 
@@ -689,7 +697,10 @@ mod tests {
         assert_eq!(parsed.status, "failed");
         assert_eq!(parsed.exit_code, Some(1));
         assert_eq!(parsed.findings.len(), 1);
-        assert_eq!(string_array(&parsed.coverage, "/technologies"), ["typescript"]);
+        assert_eq!(
+            string_array(&parsed.coverage, "/technologies"),
+            ["typescript"]
+        );
     }
 
     #[test]
@@ -749,15 +760,24 @@ mod tests {
         assert_eq!(summary.repository_statuses.get("failed"), Some(&1));
         assert_eq!(summary.severities.get("error"), Some(&1));
         assert_eq!(summary.states.get("new"), Some(&1));
-        assert_eq!(summary.expectations.get("source-unimplemented-stub"), Some(&1));
+        assert_eq!(
+            summary.expectations.get("source-unimplemented-stub"),
+            Some(&1)
+        );
         assert_eq!(summary.coverage.repositories_with_coverage, 3);
         assert_eq!(summary.coverage.repositories_without_coverage_metadata, 1);
-        assert_eq!(summary.coverage.repositories_with_unsupported_technologies, 1);
+        assert_eq!(
+            summary.coverage.repositories_with_unsupported_technologies,
+            1
+        );
         assert_eq!(summary.coverage.covered_clean_repositories, 1);
         assert_eq!(summary.coverage.unsupported_zero_finding_repositories, 1);
         assert_eq!(summary.coverage.technologies.get("typescript"), Some(&2));
         assert_eq!(summary.coverage.technologies.get("rust"), Some(&1));
-        assert_eq!(summary.coverage.unsupported_technologies.get("rust"), Some(&1));
+        assert_eq!(
+            summary.coverage.unsupported_technologies.get("rust"),
+            Some(&1)
+        );
     }
 
     #[test]
