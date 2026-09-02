@@ -21,6 +21,6 @@ cargo run --bin agent-loop-portfolio -- \
 
 The output contains repository-level status, exit code, counts, findings, and diagnostics plus portfolio totals. A repository that cannot execute `coding-tooling` is recorded as unavailable rather than aborting the entire scan. A repository with blocking findings retains the `failed` status and its findings; exit code 1 is therefore evidence, not a portfolio-runner failure.
 
-`CODING_TOOLING_BIN` can point to an explicit `coding-tooling` executable. Otherwise the runner uses the tool activated through the normal agent-loop environment registry / `PATH`.
+`CODING_TOOLING_BIN` can point to an explicit `coding-tooling` executable. Otherwise the runner first uses an installed `coding-tooling` from `PATH`, then falls back to the registered `coding-tooling` source checkout and invokes its `src/entry.ts` through Bun. This is important because repository findings are entrypoint-level commands rather than legacy `src/cli.ts` commands.
 
 This command is intentionally read-only. Turning selected findings into work items, GitHub issues, or probabilistic agent analysis is a separate orchestration step.
