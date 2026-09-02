@@ -88,16 +88,16 @@ fn resolve_coding_tooling() -> Result<CodingToolingInvocation> {
         });
     }
 
-    if let Some(registry) = environment::load_default()? {
-        if let Some(component) = registry.components.get("coding-tooling") {
-            let entrypoint = component.path.join("src").join("entry.ts");
-            if entrypoint.is_file() {
-                return Ok(CodingToolingInvocation {
-                    executable: PathBuf::from("bun"),
-                    prefix_args: vec![entrypoint.as_os_str().to_owned()],
-                    label: format!("bun {}", entrypoint.display()),
-                });
-            }
+    if let Some(registry) = environment::load_default()?
+        && let Some(component) = registry.components.get("coding-tooling")
+    {
+        let entrypoint = component.path.join("src").join("entry.ts");
+        if entrypoint.is_file() {
+            return Ok(CodingToolingInvocation {
+                executable: PathBuf::from("bun"),
+                prefix_args: vec![entrypoint.as_os_str().to_owned()],
+                label: format!("bun {}", entrypoint.display()),
+            });
         }
     }
 
