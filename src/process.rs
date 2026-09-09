@@ -3,7 +3,7 @@ use std::{
     fs::{self, File},
     io::{BufRead, BufReader, BufWriter, Write},
     path::{Path, PathBuf},
-    process::{Command, ExitStatus, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{self, RecvTimeoutError},
@@ -17,6 +17,9 @@ use chrono::Utc;
 use serde_json::Value;
 
 use crate::adapters::{AgentAdapter, Provider};
+
+const PLAYWRIGHT_CLI_SESSION_ENV: &str = "PLAYWRIGHT_CLI_SESSION";
+const PLAYWRIGHT_CLI_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone)]
 pub struct CommandSpec {
@@ -48,6 +51,77 @@ enum OutputLine {
     StderrClosed,
 }
 
+struct PlaywrightSessionGuard {
+    name: String,
+}
+
+impl PlaywrightSessionGuard {
+    fn for_attempt(attempt_directory: &Path) -> Self {
+        Self {
+            name: playwright_session_name(attempt_directory),
+        }
+    }
+
+    fn apply(&self, command: &mut Command) {
+        command.env(PLAYWRIGHT_CLI_SESSION_ENV, &self.name);
+    }
+}
+
+impl Drop for PlaywrightSessionGuard {
+    fn drop(&mut self) {
+        let Ok(mut child) = Command::new("playwright-cli")
+            .arg(format!("-s={}", self.name))
+            .arg("close")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        else {
+            return;
+        };
+        wait_for_cleanup(&mut child, PLAYWRIGHT_CLI_CLEANUP_TIMEOUT);
+    }
+}
+
+fn wait_for_cleanup(child: &mut Child, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => return,
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return;
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(10)),
+        }
+    }
+}
+
+fn playwright_session_name(attempt_directory: &Path) -> String {
+    let raw = attempt_directory
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("attempt");
+    let sanitized: String = raw
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .take(96)
+        .collect();
+    let suffix = if sanitized.is_empty() {
+        "attempt"
+    } else {
+        &sanitized
+    };
+    format!("agent-loop-{suffix}")
+}
+
 pub fn execute(
     adapter: &dyn AgentAdapter,
     spec: &CommandSpec,
@@ -68,19 +142,21 @@ pub fn execute_observed(
     fs::create_dir_all(run_directory)
         .with_context(|| format!("create run directory {}", run_directory.display()))?;
 
-    let mut child = Command::new(&spec.program)
+    let playwright_session = PlaywrightSessionGuard::for_attempt(&spec.current_dir);
+    let mut command = Command::new(&spec.program);
+    command
         .args(&spec.args)
         .current_dir(&spec.current_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| {
-            format!(
-                "start provider executable `{}`; run `agent-loop doctor` to diagnose the installation",
-                spec.program.to_string_lossy()
-            )
-        })?;
+        .stderr(Stdio::piped());
+    playwright_session.apply(&mut command);
+    let mut child = command.spawn().with_context(|| {
+        format!(
+            "start provider executable `{}`; run `agent-loop doctor` to diagnose the installation",
+            spec.program.to_string_lossy()
+        )
+    })?;
 
     let stdout = child.stdout.take().context("capture provider stdout")?;
     let stderr = child.stderr.take().context("capture provider stderr")?;
@@ -236,4 +312,49 @@ fn ensure_success(
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::playwright_session_name;
+    use std::path::Path;
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_timeout_terminates_stalled_process() {
+        use std::{
+            process::Command,
+            time::{Duration, Instant},
+        };
+
+        let mut child = Command::new("sh")
+            .args(["-c", "sleep 5"])
+            .spawn()
+            .expect("start stalled cleanup process");
+        let started = Instant::now();
+
+        super::wait_for_cleanup(&mut child, Duration::from_millis(10));
+
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "cleanup exceeded its time bound"
+        );
+        assert!(child.try_wait().unwrap().is_some());
+    }
+
+    #[test]
+    fn playwright_session_name_is_bound_to_attempt_directory() {
+        assert_eq!(
+            playwright_session_name(Path::new("/tmp/worktrees/abc-attempt-1")),
+            "agent-loop-abc-attempt-1"
+        );
+    }
+
+    #[test]
+    fn playwright_session_name_sanitizes_unsafe_characters() {
+        assert_eq!(
+            playwright_session_name(Path::new("/tmp/worktrees/attempt with spaces")),
+            "agent-loop-attempt-with-spaces"
+        );
+    }
 }
