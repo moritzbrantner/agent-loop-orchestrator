@@ -231,6 +231,10 @@ impl Fixture {
             "init failed: {}",
             String::from_utf8_lossy(&init.stderr)
         );
+        assert!(
+            !fixture.repository.path().join(".gitignore").exists(),
+            "init must not add runtime-ignore state to the target repository"
+        );
 
         let mut config = ProjectConfig::load(fixture.repository.path()).unwrap();
         config.providers.codex.executable = fixture.provider.display().to_string();
@@ -242,7 +246,7 @@ impl Fixture {
         .unwrap();
         git_ok(
             fixture.repository.path(),
-            &["add", ".agent-loop/config.toml", ".gitignore"],
+            &["add", ".agent-loop/config.toml"],
         );
         git_ok(
             fixture.repository.path(),

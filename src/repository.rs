@@ -79,25 +79,8 @@ pub fn init_with_skills(
     config.validate()?;
     fs::write(&config_path, config.to_toml()?)
         .with_context(|| format!("write {}", config_path.display()))?;
-    update_gitignore(&repository_root)?;
     register(&project_id, &repository_root)?;
     Ok(config_path)
-}
-
-fn update_gitignore(repository_root: &Path) -> Result<()> {
-    const ENTRY: &str = ".agent-loop/runs/";
-    let path = repository_root.join(".gitignore");
-    let mut contents = fs::read_to_string(&path).unwrap_or_default();
-    if contents.lines().any(|line| line.trim() == ENTRY) {
-        return Ok(());
-    }
-    if !contents.is_empty() && !contents.ends_with('\n') {
-        contents.push('\n');
-    }
-    contents.push_str("\n# Local agent-loop run evidence\n");
-    contents.push_str(ENTRY);
-    contents.push('\n');
-    fs::write(&path, contents).with_context(|| format!("update {}", path.display()))
 }
 
 fn register(project_id: &str, repository_root: &Path) -> Result<()> {

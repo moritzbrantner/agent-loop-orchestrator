@@ -68,7 +68,7 @@ agent-loop init
 agent-loop doctor
 ```
 
-`init` creates the versioned `.agent-loop/config.toml`, ignores local run evidence, and registers the repository in the per-user orchestrator registry. It does not overwrite an existing configuration unless you pass `--force`. Repositories using only direct agents, standalone procedures, or lightweight loops do not need this step.
+`init` creates the versioned `.agent-loop/config.toml` and registers the repository in the per-user orchestrator registry. Runtime state remains under the per-user Agent Loop data directory, so initialization does not add runtime-ignore entries to the target repository. It does not overwrite an existing configuration unless you pass `--force`. Repositories using only direct agents, standalone procedures, or lightweight loops do not need this step.
 
 Create a bounded work item, start it, inspect the candidate, then approve or reject it:
 
