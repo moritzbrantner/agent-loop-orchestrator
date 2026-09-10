@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   rust:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - name: Install Bubblewrap
@@ -19,17 +19,19 @@ jobs:
           sudo apt-get install --yes bubblewrap
           sudo chmod u+s "$(command -v bwrap)"
       - name: Install Rust
-        run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
+        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
       - name: Format
-        run: cargo +stable fmt --all --check
+        run: cargo fmt --all --check
       - name: Lint
-        run: cargo +stable clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Test
-        run: cargo +stable test --all-targets --all-features
+        run: cargo test --all-targets --all-features
       - name: Check setup scripts
         run: bash -n setup.sh scripts/setup.sh
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
       - name: Install dashboard dependencies
         working-directory: web
         run: bun install --frozen-lockfile
