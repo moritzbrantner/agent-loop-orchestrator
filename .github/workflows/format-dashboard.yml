@@ -24,16 +24,17 @@ jobs:
       - name: Apply canonical dashboard formatting
         working-directory: web
         run: bun run format:write
-      - name: Commit normalized dashboard sources
+      - name: Commit normalized tracked dashboard files
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add web/src/api.ts web/src/app.tsx web/src/main.tsx web/src/setup.tsx web/tsconfig.json web/vite.config.ts
+          git add -u web
           git diff --cached --check
           if git diff --cached --quiet; then
             echo "Dashboard formatting is already canonical."
             exit 0
           fi
+          git diff --cached --name-only
           git commit -m "Normalize dashboard formatting"
           git push origin "HEAD:${GITHUB_REF_NAME}"
