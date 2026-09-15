@@ -671,30 +671,23 @@ fn run_control(command: ControlCommands) -> Result<(&'static str, Value)> {
 }
 
 fn emit_control(result: Result<(&'static str, Value)>) {
-    match result {
-        Ok((kind, data)) => println!(
-            "{}",
-            serde_json::to_string(&json!({
-                "schemaVersion": 1,
-                "ok": true,
-                "kind": kind,
-                "data": data,
-            }))
-            .expect("serialize control response")
-        ),
-        Err(error) => println!(
-            "{}",
-            serde_json::to_string(&json!({
-                "schemaVersion": 1,
-                "ok": false,
-                "error": {
-                    "code": control_error_code(&error),
-                    "message": format!("{error:#}"),
-                }
-            }))
-            .expect("serialize control error")
-        ),
-    }
+    let payload = match result {
+        Ok((kind, data)) => json!({
+            "schemaVersion": 1,
+            "ok": true,
+            "kind": kind,
+            "data": data,
+        }),
+        Err(error) => json!({
+            "schemaVersion": 1,
+            "ok": false,
+            "error": {
+                "code": control_error_code(&error),
+                "message": format!("{error:#}"),
+            }
+        }),
+    };
+    println!("{payload}");
 }
 
 fn control_error_code(error: &anyhow::Error) -> &'static str {
