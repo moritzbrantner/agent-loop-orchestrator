@@ -1,4 +1,4 @@
-name: Materialize root Bun lock
+name: Materialize root Bun workspace
 
 on:
   push:
@@ -18,17 +18,29 @@ jobs:
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.0
-      - name: Generate root lock
-        run: bun install
-      - name: Commit root lock
+      - name: Establish root workspace ownership
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path('package.json')
+          package = json.loads(path.read_text())
+          package['workspaces'] = ['web']
+          path.write_text(json.dumps(package, indent=2) + '\n')
+          PY
+          rm -f web/bun.lock
+          bun install
+          (cd web && bun install --frozen-lockfile)
+      - name: Commit canonical workspace lock
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add bun.lock
+          git add package.json bun.lock web/bun.lock
           if git diff --cached --quiet; then
-            echo "Root Bun lock is already current."
+            echo "Root Bun workspace is already current."
             exit 0
           fi
-          git commit -m "Lock repository Bun toolchain metadata"
+          git commit -m "Centralize Bun workspace ownership"
           git push origin "HEAD:${GITHUB_REF_NAME}"
