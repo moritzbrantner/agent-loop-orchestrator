@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "profile": "repository-foundation-v1",
+  "tiers": {
+    "fast": [
+      "format:check",
+      "lint",
+      "typecheck",
+      "build",
+      "test:unit"
+    ],
+    "full": [
+      "format:check",
+      "lint",
+      "typecheck",
+      "build",
+      "test:unit",
+      "test:integration",
+      "test:integration:workflow",
+      "test:e2e:smoke",
+      "test:accessibility",
+      "benchmark:smoke"
+    ],
+    "integration": [
+      "test:integration"
+    ],
+    "workflow": [
+      "test:integration:workflow"
+    ],
+    "e2e": [
+      "test:e2e:smoke",
+      "test:accessibility"
+    ],
+    "performance": [
+      "benchmark:smoke"
+    ]
+  },
+  "requiredCapabilities": [
+    "format:check",
+    "lint",
+    "typecheck",
+    "build",
+    "test:unit"
+  ],
+  "optionalCapabilities": [
+    "test:integration",
+    "test:integration:workflow",
+    "test:e2e:smoke",
+    "test:accessibility",
+    "benchmark:smoke"
+  ]
+}

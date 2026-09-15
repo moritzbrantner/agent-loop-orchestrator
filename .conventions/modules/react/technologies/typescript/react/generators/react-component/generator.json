@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "id": "react-component",
+  "description": "Create a colocated React component scaffold with an explicit local entry point.",
+  "rules": ["REACT-001"],
+  "technologies": ["typescript", "react"],
+  "inputs": {
+    "name": {
+      "type": "identifier",
+      "required": true
+    }
+  },
+  "target": {
+    "kind": "concept",
+    "concept": "component-root"
+  },
+  "operations": [
+    {
+      "kind": "create-file",
+      "template": "templates/Component.tsx.tmpl",
+      "path": "{{name | pascal}}/{{name | pascal}}.tsx"
+    },
+    {
+      "kind": "create-file",
+      "template": "templates/index.ts.tmpl",
+      "path": "{{name | pascal}}/index.ts"
+    }
+  ],
+  "compose": [],
+  "prerequisites": [
+    {
+      "kind": "package",
+      "name": "react"
+    }
+  ],
+  "postconditions": ["format:check", "lint", "typecheck"]
+}

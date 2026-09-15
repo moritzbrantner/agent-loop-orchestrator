@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "ruleId": "GIT-004",
+  "enforcement": {
+    "kind": "builtin",
+    "check": "ci-action-pins"
+  }
+}
