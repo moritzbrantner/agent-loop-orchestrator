@@ -1,9 +1,8 @@
 {
   "name": "agent-loop-dashboard",
-  "private": true,
   "version": "0.1.0",
+  "private": true,
   "type": "module",
-  "packageManager": "bun@1.4.0",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
@@ -26,5 +25,6 @@
     "oxlint-tsgolint": "7.0.2001",
     "typescript": "5.9.3",
     "vite": "8.2.0"
-  }
+  },
+  "packageManager": "bun@1.4.0"
 }

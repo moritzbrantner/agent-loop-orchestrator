@@ -60,8 +60,15 @@ const runContractSchema = z.object({
   baseline: baselineSchema,
   candidates: z.array(candidateSchema),
   checks: z.array(checkSchema),
-  decisions: z.array(z.object({ decision: z.enum(["approved", "rejected", "changes-requested"]), reason: z.string().optional() })),
-  publications: z.array(z.object({ kind: z.string(), status: z.string(), candidateIdentity: z.string() })),
+  decisions: z.array(
+    z.object({
+      decision: z.enum(["approved", "rejected", "changes-requested"]),
+      reason: z.string().optional(),
+    }),
+  ),
+  publications: z.array(
+    z.object({ kind: z.string(), status: z.string(), candidateIdentity: z.string() }),
+  ),
 });
 const runSchema = z.object({
   id: z.string(),
@@ -79,12 +86,14 @@ const runSchema = z.object({
 });
 
 const dashboardSchema = z.object({
-  projects: z.array(z.object({
-    id: z.string(),
-    path: z.string(),
-    defaultProvider: providerSchema,
-    targetBranch: z.string(),
-  })),
+  projects: z.array(
+    z.object({
+      id: z.string(),
+      path: z.string(),
+      defaultProvider: providerSchema,
+      targetBranch: z.string(),
+    }),
+  ),
   workItems: z.array(workItemSchema),
   runs: z.array(runSchema),
   activeRunId: z.string().nullable(),
@@ -103,14 +112,22 @@ export type EventMessage = z.infer<typeof eventSchema>;
 export type Provider = z.infer<typeof providerSchema>;
 
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
     super(message);
   }
 }
 
 const errorSchema = z.object({ error: z.string() });
 
-async function request<T>(path: string, token: string, schema: z.ZodType<T>, init?: RequestInit): Promise<T> {
+async function request<T>(
+  path: string,
+  token: string,
+  schema: z.ZodType<T>,
+  init?: RequestInit,
+): Promise<T> {
   const response = await fetch(path, {
     ...init,
     headers: {
@@ -121,7 +138,10 @@ async function request<T>(path: string, token: string, schema: z.ZodType<T>, ini
   });
   if (!response.ok) {
     const body = errorSchema.safeParse(await response.json().catch(() => ({})));
-    throw new ApiError(body.success ? body.data.error : "The service rejected this request.", response.status);
+    throw new ApiError(
+      body.success ? body.data.error : "The service rejected this request.",
+      response.status,
+    );
   }
   if (response.status === 204) return undefined as T;
   return schema.parse(await response.json());
@@ -131,12 +151,15 @@ export function getDashboard(token: string) {
   return request("/api/dashboard", token, dashboardSchema);
 }
 
-export function createWorkItem(token: string, input: {
-  projectId: string;
-  title: string;
-  prompt: string;
-  declaredScope: string[];
-}) {
+export function createWorkItem(
+  token: string,
+  input: {
+    projectId: string;
+    title: string;
+    prompt: string;
+    declaredScope: string[];
+  },
+) {
   return request("/api/work-items", token, workItemSchema, {
     method: "POST",
     body: JSON.stringify(input),
@@ -144,10 +167,15 @@ export function createWorkItem(token: string, input: {
 }
 
 export function startWorkItem(token: string, id: string, provider: Provider | null) {
-  return request(`/api/work-items/${id}/start`, token, z.object({ disposition: z.literal("started"), workItemId: z.string() }), {
-    method: "POST",
-    body: JSON.stringify({ provider }),
-  });
+  return request(
+    `/api/work-items/${id}/start`,
+    token,
+    z.object({ disposition: z.literal("started"), workItemId: z.string() }),
+    {
+      method: "POST",
+      body: JSON.stringify({ provider }),
+    },
+  );
 }
 
 export function decideRun(token: string, id: string, decision: "approve" | "reject") {
