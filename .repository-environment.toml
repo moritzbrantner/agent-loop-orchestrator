@@ -1,0 +1,24 @@
+schema_version = 1
+
+[policy]
+track = "latest-stable"
+
+[system]
+apt = ["bubblewrap"]
+
+[setup]
+commands = [
+  "cargo fetch --locked",
+  "cd web && bun install --frozen-lockfile",
+]
+
+[maintenance]
+commands = [
+  "cargo fetch --locked",
+  "cd web && bun install --frozen-lockfile",
+]
+
+[cache]
+paths = ["~/.cargo", "target", "web/node_modules"]
+
+[compatibility_holds]
