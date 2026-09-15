@@ -39,6 +39,145 @@ jobs:
           --root "$GITHUB_WORKSPACE/target"
           --conventions-root "$GITHUB_WORKSPACE/coding-agent-conventions"
           --json
+      - name: Install repository environment contract
+        working-directory: target
+        shell: bash
+        run: |
+          cat > .repository-environment.toml <<'EOF'
+          schema_version = 1
+
+          [policy]
+          track = "latest-stable"
+
+          [system]
+          apt = ["bubblewrap"]
+
+          [setup]
+          commands = [
+            "cargo fetch --locked",
+            "cd web && bun install --frozen-lockfile",
+          ]
+
+          [maintenance]
+          commands = [
+            "cargo fetch --locked",
+            "cd web && bun install --frozen-lockfile",
+          ]
+
+          [cache]
+          paths = ["~/.cargo", "target", "web/node_modules"]
+
+          [compatibility_holds]
+          EOF
+          cat > scripts/codex-environment.sh <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          mode="${1:-setup}"
+          case "$mode" in
+            "setup"|"maintenance") ;;
+            *) printf 'usage: %s [setup|maintenance]\n' "$0" >&2; exit 2 ;;
+          esac
+
+          root="$(git rev-parse --show-toplevel)"
+          config="$root/.repository-environment.toml"
+          [[ -f "$config" ]] || { printf 'missing environment-v1 config: %s\n' "$config" >&2; exit 2; }
+
+          run_privileged() {
+            if command -v sudo >/dev/null 2>&1; then sudo "$@"; else "$@"; fi
+          }
+
+          if [[ "$mode" == "setup" ]] && command -v apt-get >/dev/null 2>&1; then
+            mapfile -t apt_packages < <(python3 - "$config" <<'PY'
+          import sys, tomllib
+          with open(sys.argv[1], "rb") as handle:
+              data = tomllib.load(handle)
+          for package in data.get("system", {}).get("apt", []):
+              print(package)
+          PY
+            )
+            if (( ${#apt_packages[@]} )); then
+              run_privileged apt-get update
+              run_privileged apt-get install -y --no-install-recommends "${apt_packages[@]}"
+            fi
+            if command -v bwrap >/dev/null 2>&1; then
+              run_privileged chmod u+s "$(command -v bwrap)"
+            fi
+          fi
+
+          rust_toolchain="$(python3 - "$root/rust-toolchain.toml" <<'PY'
+          import pathlib, sys, tomllib
+          path = pathlib.Path(sys.argv[1])
+          if path.is_file():
+              print(tomllib.loads(path.read_text()).get("toolchain", {}).get("channel", ""))
+          PY
+          )"
+          if [[ -n "$rust_toolchain" ]]; then
+            [[ "$rust_toolchain" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { printf 'Rust toolchain must be exact, got %s\n' "$rust_toolchain" >&2; exit 2; }
+            command -v rustup >/dev/null 2>&1 || { printf '%s\n' 'rustup is required by the trusted base environment.' >&2; exit 2; }
+            rustup toolchain install "$rust_toolchain" --profile minimal --component rustfmt,clippy
+          fi
+
+          bun_version="$(python3 - "$root/web/package.json" <<'PY'
+          import json, pathlib, sys
+          path = pathlib.Path(sys.argv[1])
+          if path.is_file():
+              value = json.loads(path.read_text()).get("packageManager", "")
+              print(value.removeprefix("bun@") if value.startswith("bun@") else "")
+          PY
+          )"
+          [[ "$bun_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]] || { printf 'web/package.json must pin Bun exactly\n' >&2; exit 2; }
+          command -v bun >/dev/null 2>&1 || { printf '%s\n' 'bun is required by the trusted base environment.' >&2; exit 2; }
+          [[ "$(bun --version)" == "$bun_version" ]] || { printf 'Bun preflight mismatch: expected %s, got %s\n' "$bun_version" "$(bun --version)" >&2; exit 1; }
+
+          mapfile -t environment_commands < <(python3 - "$config" "$mode" <<'PY'
+          import sys, tomllib
+          with open(sys.argv[1], "rb") as handle:
+              data = tomllib.load(handle)
+          for command in data.get(sys.argv[2], {}).get("commands", []):
+              print(command)
+          PY
+          )
+          for command in "${environment_commands[@]}"; do
+            (cd "$root" && bash -lc "$command")
+          done
+
+          if [[ -n "$rust_toolchain" ]]; then
+            observed_rust="$(cd "$root" && rustc --version | awk '{print $2}')"
+            [[ "$observed_rust" == "$rust_toolchain" ]] || { printf 'Rust preflight mismatch: expected %s, got %s\n' "$rust_toolchain" "$observed_rust" >&2; exit 1; }
+          fi
+          EOF
+          chmod +x scripts/codex-environment.sh
+      - name: Adopt convention-aware frontend tooling
+        working-directory: target/web
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path("package.json")
+          package = json.loads(path.read_text())
+          package["dependencies"] = {
+              "react": "19.2.8",
+              "react-dom": "19.2.8",
+              "zod": "4.4.3",
+          }
+          package["devDependencies"] = {
+              "@types/react": "19.2.18",
+              "@types/react-dom": "19.2.4",
+              "oxfmt": "0.65.0",
+              "oxlint": "1.80.0",
+              "oxlint-tsgolint": "7.0.2001",
+              "typescript": "5.9.3",
+              "vite": "8.2.0",
+          }
+          package["scripts"]["format:check"] = "oxfmt --check ."
+          package["scripts"]["format:write"] = "oxfmt ."
+          package["scripts"]["lint"] = "oxlint ."
+          package["scripts"]["lint:fix"] = "oxlint --fix ."
+          path.write_text(json.dumps(package, indent=2) + "\n")
+          PY
+          bun install
       - name: Verify managed convention snapshot
         working-directory: target
         run: >-
@@ -51,16 +190,17 @@ jobs:
           bun "$GITHUB_WORKSPACE/coding-tooling/src/entry.ts" foundation audit
           --root "$GITHUB_WORKSPACE/target"
           --json
-      - name: Commit generated foundation
+      - name: Commit converged foundation
         working-directory: target
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .coding-tooling.json conventions.json conventions.lock.json .conventions renovate.json
+          git add .coding-tooling.json conventions.json conventions.lock.json .conventions renovate.json \
+            .repository-environment.toml scripts/codex-environment.sh web/package.json web/bun.lock
           if git diff --cached --quiet; then
-            echo "Foundation is already materialized."
+            echo "Foundation is already converged."
             exit 0
           fi
-          git commit -m "Materialize deterministic repository foundation"
+          git commit -m "Converge deterministic repository foundation"
           git push origin "HEAD:${GITHUB_REF_NAME}"
