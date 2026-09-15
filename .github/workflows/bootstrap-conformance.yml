@@ -178,6 +178,9 @@ jobs:
           path.write_text(json.dumps(package, indent=2) + "\n")
           PY
           bun install
+      - name: Provision declared repository environment
+        working-directory: target
+        run: ./scripts/codex-environment.sh setup
       - name: Verify managed convention snapshot
         working-directory: target
         run: >-
@@ -190,6 +193,16 @@ jobs:
           bun "$GITHUB_WORKSPACE/coding-tooling/src/entry.ts" foundation audit
           --root "$GITHUB_WORKSPACE/target"
           --json
+      - name: Run strict fast tier
+        working-directory: target
+        run: >-
+          bun "$GITHUB_WORKSPACE/coding-tooling/src/cli.ts" run
+          --tier fast --strict --json
+      - name: Run strict full tier
+        working-directory: target
+        run: >-
+          bun "$GITHUB_WORKSPACE/coding-tooling/src/cli.ts" run
+          --tier full --strict --json
       - name: Commit converged foundation
         working-directory: target
         shell: bash
