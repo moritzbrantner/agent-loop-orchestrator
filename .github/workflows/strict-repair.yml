@@ -1,0 +1,85 @@
+name: Repair strict convention finding
+
+on:
+  push:
+    branches: [fix/repository-conformance-18]
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Replace panicking control serialization
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/cli.rs')
+          source = path.read_text()
+          old = '''fn emit_control(result: Result<(&'static str, Value)>) {
+              match result {
+                  Ok((kind, data)) => println!(
+                      "{}",
+                      serde_json::to_string(&json!({
+                          "schemaVersion": 1,
+                          "ok": true,
+                          "kind": kind,
+                          "data": data,
+                      }))
+                      .expect("serialize control response")
+                  ),
+                  Err(error) => println!(
+                      "{}",
+                      serde_json::to_string(&json!({
+                          "schemaVersion": 1,
+                          "ok": false,
+                          "error": {
+                              "code": control_error_code(&error),
+                              "message": format!("{error:#}"),
+                          }
+                      }))
+                      .expect("serialize control error")
+                  ),
+              }
+          }
+          '''
+          new = '''fn emit_control(result: Result<(&'static str, Value)>) {
+              let payload = match result {
+                  Ok((kind, data)) => json!({
+                      "schemaVersion": 1,
+                      "ok": true,
+                      "kind": kind,
+                      "data": data,
+                  }),
+                  Err(error) => json!({
+                      "schemaVersion": 1,
+                      "ok": false,
+                      "error": {
+                          "code": control_error_code(&error),
+                          "message": format!("{error:#}"),
+                      }
+                  }),
+              };
+              println!("{payload}");
+          }
+          '''
+          if old not in source:
+              raise SystemExit('expected emit_control block was not found')
+          path.write_text(source.replace(old, new, 1))
+          PY
+          cargo fmt --all
+      - name: Commit repair
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/cli.rs
+          git diff --cached --check
+          git commit -m "Avoid panicking control response serialization"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
