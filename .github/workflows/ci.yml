@@ -20,41 +20,15 @@ jobs:
 
           path = Path("src/cli.rs")
           text = path.read_text()
-          old_success = '''            serde_json::to_string(&json!({
-                "schemaVersion": 1,
-                "ok": true,
-                "kind": kind,
-                "data": data,
-            }))
-            .expect("serialize control response")'''
-          new_success = '''            json!({
-                "schemaVersion": 1,
-                "ok": true,
-                "kind": kind,
-                "data": data,
-            })
-            .to_string()'''
-          old_error = '''            serde_json::to_string(&json!({
-                "schemaVersion": 1,
-                "ok": false,
-                "error": {
-                    "code": control_error_code(&error),
-                    "message": format!("{error:#}"),
-                }
-            }))
-            .expect("serialize control error")'''
-          new_error = '''            json!({
-                "schemaVersion": 1,
-                "ok": false,
-                "error": {
-                    "code": control_error_code(&error),
-                    "message": format!("{error:#}"),
-                }
-            })
-            .to_string()'''
-          if text.count(old_success) != 1 or text.count(old_error) != 1:
+          opening = "serde_json::to_string(&json!({"
+          response_end = '}))\n            .expect("serialize control response")'
+          error_end = '}))\n            .expect("serialize control error")'
+          if text.count(opening) != 2 or text.count(response_end) != 1 or text.count(error_end) != 1:
               raise SystemExit("control JSON serialization shape changed; refusing broad replacement")
-          path.write_text(text.replace(old_success, new_success).replace(old_error, new_error))
+          text = text.replace(opening, "json!({")
+          text = text.replace(response_end, '})\n            .to_string()')
+          text = text.replace(error_end, '})\n            .to_string()')
+          path.write_text(text)
           PY
       - name: Commit Rust conformance repair
         env:
