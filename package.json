@@ -1,6 +1,5 @@
 {
-  "name": "agent-loop-workspace",
+  "name": "agent-loop-root",
   "private": true,
-  "packageManager": "bun@1.4.0",
-  "workspaces": ["web"]
+  "packageManager": "bun@1.4.0"
 }

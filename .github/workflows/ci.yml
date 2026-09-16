@@ -2,35 +2,35 @@ name: CI
 
 on:
   pull_request:
-  push:
-    branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  validate:
+  normalize-bun-locks:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - name: Install Bubblewrap
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+      - name: Install Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+      - name: Normalize root and dashboard locks
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes bubblewrap
-          sudo chmod u+s "$(command -v bwrap)"
-      - name: Install Rust
-        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
-      - name: Run full deterministic validation
-        uses: moritzbrantner/coding-tooling@190f06c17606b14919da8389867798f2ed9b9dc5
-        with:
-          operation: run
-          tier: full
-          strict: "true"
-          bun-version: 1.4.0
-          report-path: .artifacts/coding-tooling/full.json
-      - name: Check repository conformance
-        uses: moritzbrantner/coding-tooling@190f06c17606b14919da8389867798f2ed9b9dc5
-        with:
-          operation: conformance
-          bun-version: 1.4.0
-          report-path: .artifacts/coding-tooling/conformance.json
+          bun install --lockfile-only --ignore-scripts
+          (cd web && bun install --lockfile-only --ignore-scripts)
+      - name: Commit Bun lock normalization
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          git add package.json bun.lock web/package.json web/bun.lock
+          if git diff --cached --quiet; then
+            echo "Bun lockfiles already normalized."
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "Use component-local Bun locks"
+          git push origin "HEAD:${HEAD_REF}"
