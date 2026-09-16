@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "profile": "repository-foundation-v1",
+  "tiers": {
+    "fast": ["format:check", "lint", "typecheck", "test", "build"],
+    "full": ["format:check", "lint", "typecheck", "test", "build", "package:check"]
+  },
+  "requiredCapabilities": [
+    "format:check",
+    "lint",
+    "typecheck",
+    "test",
+    "build",
+    "package:check"
+  ],
+  "capabilityCommands": {
+    ".": {
+      "format:check": ["cargo", "fmt", "--all", "--check"],
+      "lint": ["cargo", "clippy", "--all-targets", "--all-features", "--", "-D", "warnings"],
+      "test": ["cargo", "test", "--all-targets", "--all-features"],
+      "package:check": ["bash", "-n", "setup.sh", "scripts/setup.sh"]
+    }
+  }
+}
