@@ -4,18 +4,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use agent_loop_orchestrator::{
+    contracts::{CheckOutcome, Evidence},
+    execution::ExecutionService,
+    repository,
+};
 use anyhow::{Context, Result};
 use chrono::{DateTime, TimeDelta, Utc};
 use clap::Parser;
 use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
-
-use agent_loop_orchestrator::{
-    contracts::{CheckOutcome, Evidence},
-    execution::ExecutionService,
-    repository,
-};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -134,7 +133,11 @@ struct UsageEvidence {
     source: Option<&'static str>,
 }
 
-fn parse_time(value: Option<String>, label: &str, fallback: DateTime<Utc>) -> Result<DateTime<Utc>> {
+fn parse_time(
+    value: Option<String>,
+    label: &str,
+    fallback: DateTime<Utc>,
+) -> Result<DateTime<Utc>> {
     match value {
         Some(value) => DateTime::parse_from_rfc3339(&value)
             .map(|value| value.with_timezone(&Utc))
@@ -152,7 +155,9 @@ fn enum_name(value: &impl Serialize) -> String {
 
 fn elapsed_ms(started_at: DateTime<Utc>, finished_at: Option<DateTime<Utc>>) -> Option<u64> {
     let finished_at = finished_at?;
-    let duration = finished_at.signed_duration_since(started_at).num_milliseconds();
+    let duration = finished_at
+        .signed_duration_since(started_at)
+        .num_milliseconds();
     u64::try_from(duration).ok()
 }
 
@@ -176,7 +181,10 @@ fn environment_fingerprint(data_root: &Path, run_id: Uuid) -> Option<Environment
             .get("fingerprintVersion")
             .and_then(Value::as_str)
             .map(str::to_owned),
-        profile: data.get("profile").and_then(Value::as_str).map(str::to_owned),
+        profile: data
+            .get("profile")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
         matched: expected
             .as_ref()
             .zip(verified.as_ref())
@@ -212,10 +220,10 @@ fn collect_usage(value: &Value, usage: &mut UsageEvidence) {
                 match normalize_usage_key(key).as_str() {
                     "inputtokens" | "prompttokens" => update_u64(&mut usage.input_tokens, value),
                     "outputtokens" | "completiontokens" => {
-                        update_u64(&mut usage.output_tokens, value)
+                        update_u64(&mut usage.output_tokens, value);
                     }
                     "cachedinputtokens" | "cachedprompttokens" => {
-                        update_u64(&mut usage.cached_input_tokens, value)
+                        update_u64(&mut usage.cached_input_tokens, value);
                     }
                     "totaltokens" => update_u64(&mut usage.total_tokens, value),
                     "costusd" | "totalcostusd" => update_f64(&mut usage.cost_usd, value),
@@ -293,7 +301,12 @@ fn deterministic_time_to_green_ms(
         return None;
     }
     let green_at = required.iter().map(|check| check.finished_at).max()?;
-    u64::try_from(green_at.signed_duration_since(run_started_at).num_milliseconds()).ok()
+    u64::try_from(
+        green_at
+            .signed_duration_since(run_started_at)
+            .num_milliseconds(),
+    )
+    .ok()
 }
 
 fn median(values: &[u64]) -> Option<u64> {
@@ -303,7 +316,7 @@ fn median(values: &[u64]) -> Option<u64> {
     let mut values = values.to_vec();
     values.sort_unstable();
     let middle = values.len() / 2;
-    if values.len() % 2 == 0 {
+    if values.len().is_multiple_of(2) {
         Some((values[middle - 1] + values[middle]) / 2)
     } else {
         Some(values[middle])
@@ -393,9 +406,9 @@ fn main() -> Result<()> {
                     .and_then(|candidate| candidate.git_sha.clone()),
                 provider: run.provider.to_string(),
                 model: run.contract.agent.model.clone(),
-                resumed_provider_session: provider_session_id
-                    .as_ref()
-                    .is_some_and(|session_id| session_counts.get(session_id).copied().unwrap_or(0) > 1),
+                resumed_provider_session: provider_session_id.as_ref().is_some_and(|session_id| {
+                    session_counts.get(session_id).copied().unwrap_or(0) > 1
+                }),
                 provider_session_id,
                 attempt_number: attempt.number,
                 started_at: attempt.started_at,
@@ -417,7 +430,10 @@ fn main() -> Result<()> {
     }
     attempts.sort_by_key(|attempt| attempt.started_at);
 
-    let agent_durations: Vec<_> = attempts.iter().filter_map(|attempt| attempt.execution_ms).collect();
+    let agent_durations: Vec<_> = attempts
+        .iter()
+        .filter_map(|attempt| attempt.execution_ms)
+        .collect();
     let green_durations: Vec<_> = attempts
         .iter()
         .filter_map(|attempt| attempt.deterministic_time_to_green_ms)
@@ -476,7 +492,10 @@ fn main() -> Result<()> {
     };
     let json = serde_json::to_string_pretty(&report)?;
     if let Some(output) = args.output {
-        if let Some(parent) = output.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        if let Some(parent) = output
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
             fs::create_dir_all(parent)?;
         }
         fs::write(&output, format!("{json}\n"))
@@ -488,10 +507,11 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{UsageEvidence, ci_run_ids_from_evidence, collect_usage};
     use agent_loop_orchestrator::contracts::Evidence;
     use chrono::Utc;
     use serde_json::json;
+
+    use super::{UsageEvidence, ci_run_ids_from_evidence, collect_usage};
 
     #[test]
     fn collects_max_provider_usage_without_double_counting_events() {
@@ -499,7 +519,9 @@ mod tests {
         collect_usage(
             &json!({
                 "event": {"usage": {"input_tokens": 100, "output_tokens": 20}},
-                "later": {"usage": {"inputTokens": 140, "outputTokens": 30, "totalTokens": 170}}
+                "later": {
+                    "usage": {"inputTokens": 140, "outputTokens": 30, "totalTokens": 170}
+                }
             }),
             &mut usage,
         );
