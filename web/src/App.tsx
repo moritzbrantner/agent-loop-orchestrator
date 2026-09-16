@@ -51,7 +51,9 @@ export function App() {
     }
   }, [token]);
 
-  useEffect(() => { void loadDashboard(); }, [loadDashboard]);
+  useEffect(() => {
+    loadDashboard().catch((reason) => setError(messageFor(reason)));
+  }, [loadDashboard]);
   useEffect(() => {
     if (!token) return;
     const controller = new AbortController();
@@ -68,13 +70,15 @@ export function App() {
           buffer += decoder.decode(next.value, { stream: true });
           const events = buffer.split("\n\n");
           buffer = events.pop() ?? "";
-          for (const rawEvent of events) handleEvent(rawEvent, setDashboard, loadDashboard);
+          for (const rawEvent of events) await handleEvent(rawEvent, setDashboard, loadDashboard);
         }
       } catch (reason) {
         if (!controller.signal.aborted) setError(messageFor(reason));
       }
     };
-    void connect();
+    connect().catch((reason) => {
+      if (!controller.signal.aborted) setError(messageFor(reason));
+    });
     return () => controller.abort();
   }, [token, loadDashboard]);
 
@@ -97,7 +101,7 @@ export function App() {
     }
   };
 
-  if (!token) return <Unlock onUnlock={async (submitted) => { sessionStorage.setItem(sessionTokenKey, submitted); setToken(submitted); }} />;
+  if (!token) return <Unlock onUnlock={(submitted) => { sessionStorage.setItem(sessionTokenKey, submitted); setToken(submitted); }} />;
   return <main className="shell">
     <header className="masthead"><div><p className="eyebrow">LOCAL AGENT CONTROL</p><h1>Agent Loop</h1></div><button className="quiet" onClick={() => void Notification.requestPermission()}>Enable desktop notifications</button></header>
     {error && <p className="error" role="alert">{error}</p>}
@@ -125,9 +129,9 @@ export function App() {
   </main>;
 }
 
-function Unlock({ onUnlock }: { onUnlock: (token: string) => Promise<void> }) {
+function Unlock({ onUnlock }: { onUnlock: (token: string) => void }) {
   const [token, setToken] = useState("");
-  return <main className="unlock"><form onSubmit={(event) => { event.preventDefault(); void onUnlock(token); }}><p className="eyebrow">SECURE LOCAL SERVICE</p><h1>Unlock Agent Loop</h1><p>Enter the shared access token for this dashboard session.</p><input aria-label="Access token" type="password" autoFocus value={token} onChange={(event) => setToken(event.target.value)} required /><button>Unlock dashboard</button></form></main>;
+  return <main className="unlock"><form onSubmit={(event) => { event.preventDefault(); onUnlock(token); }}><p className="eyebrow">SECURE LOCAL SERVICE</p><h1>Unlock Agent Loop</h1><p>Enter the shared access token for this dashboard session.</p><input aria-label="Access token" type="password" autoFocus value={token} onChange={(event) => setToken(event.target.value)} required /><button>Unlock dashboard</button></form></main>;
 }
 
 function WorkItemComposer({ dashboard, composer, working, onChange, onSubmit }: { dashboard: Dashboard; composer: Composer; working: boolean; onChange: (value: Composer) => void; onSubmit: (event: FormEvent) => void }) {
@@ -158,13 +162,13 @@ function RunCard({ run, onDecision, onCancel }: { run: Run; onDecision: (decisio
 }
 
 function Empty({ label }: { label: string }) { return <div className="empty"><p>{label}</p></div>; }
-function handleEvent(rawEvent: string, setDashboard: Dispatch<SetStateAction<Dashboard | null>>, refresh: () => Promise<void>) {
+async function handleEvent(rawEvent: string, setDashboard: Dispatch<SetStateAction<Dashboard | null>>, refresh: () => Promise<void>) {
   const data = rawEvent.split("\n").find((line) => line.startsWith("data: "))?.slice(6);
   if (!data) return;
   let event: EventMessage | null = null;
   try { event = parseEvent(data); } catch { return; }
   if (!event) return;
-  if (event.kind === "state") { void refresh(); return; }
+  if (event.kind === "state") { await refresh(); return; }
   const line = outputLineSchema.safeParse(event.line);
   if (!line.success || !event.runId) return;
   setDashboard((current) => current && ({ ...current, runs: current.runs.map((run) => run.id === event.runId ? { ...run, output: [...run.output, line.data] } : run) }));
