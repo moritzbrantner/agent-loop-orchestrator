@@ -6,15 +6,13 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  rust:
+  validate:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
       - name: Install Bubblewrap
         run: |
           sudo apt-get update
@@ -22,54 +20,17 @@ jobs:
           sudo chmod u+s "$(command -v bwrap)"
       - name: Install Rust
         run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
-      - name: Format
-        run: cargo fmt --all --check
-      - name: Lint
-        run: cargo clippy --all-targets --all-features -- -D warnings
-      - name: Test
-        run: cargo test --all-targets --all-features
-      - name: Check setup scripts
-        run: bash -n setup.sh scripts/setup.sh
-      - name: Install Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - name: Check repository conformance
+        uses: moritzbrantner/coding-tooling@190f06c17606b14919da8389867798f2ed9b9dc5
         with:
+          operation: conformance
           bun-version: 1.4.0
-      - name: Install dashboard dependencies
-        working-directory: web
-        run: bun install --frozen-lockfile
-      - name: Build dashboard
-        working-directory: web
-        run: bun run build
-      - name: Check out coding-tooling for convention materialization
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+          report-path: .artifacts/coding-tooling/conformance.json
+      - name: Run full deterministic validation
+        uses: moritzbrantner/coding-tooling@190f06c17606b14919da8389867798f2ed9b9dc5
         with:
-          repository: moritzbrantner/coding-tooling
-          ref: 190f06c17606b14919da8389867798f2ed9b9dc5
-          path: .ci-tools/coding-tooling
-      - name: Check out coding-agent-conventions
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          repository: moritzbrantner/coding-agent-conventions
-          ref: 3ef29b385b5b37ac3282754a3c9261478cc7622d
-          path: .ci-tools/coding-agent-conventions
-      - name: Materialize issue 18 convention snapshot
-        run: |
-          bun .ci-tools/coding-tooling/src/cli.ts conventions init \
-            agent-delegation react rust vite \
-            --profile foundation \
-            --root . \
-            --conventions-root .ci-tools/coding-agent-conventions \
-            --json
-      - name: Commit generated convention snapshot
-        env:
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
-        run: |
-          git add conventions.json conventions.lock.json .conventions
-          if git diff --cached --quiet; then
-            echo "Convention snapshot already committed."
-            exit 0
-          fi
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git commit -m "Install deterministic repository conventions"
-          git push origin "HEAD:${HEAD_REF}"
+          operation: run
+          tier: full
+          strict: "true"
+          bun-version: 1.4.0
+          report-path: .artifacts/coding-tooling/full.json
