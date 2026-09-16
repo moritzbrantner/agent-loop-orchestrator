@@ -38,3 +38,32 @@ jobs:
       - name: Build dashboard
         working-directory: web
         run: bun run build
+      - name: Check out coding-tooling for convention materialization
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: moritzbrantner/coding-tooling
+          ref: 190f06c17606b14919da8389867798f2ed9b9dc5
+          path: .ci-tools/coding-tooling
+      - name: Check out coding-agent-conventions
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: moritzbrantner/coding-agent-conventions
+          ref: 3ef29b385b5b37ac3282754a3c9261478cc7622d
+          path: .ci-tools/coding-agent-conventions
+      - name: Materialize issue 18 convention snapshot
+        run: |
+          bun .ci-tools/coding-tooling/src/cli.ts conventions init \
+            agent-delegation react rust vite \
+            --profile foundation \
+            --root . \
+            --conventions-root .ci-tools/coding-agent-conventions \
+            --json
+      - name: Upload convention snapshot
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: issue-18-conventions
+          path: |
+            conventions.json
+            conventions.lock.json
+            .conventions
+          if-no-files-found: error
