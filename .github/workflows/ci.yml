@@ -20,12 +20,6 @@ jobs:
           sudo chmod u+s "$(command -v bwrap)"
       - name: Install Rust
         run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
-      - name: Check repository conformance
-        uses: moritzbrantner/coding-tooling@190f06c17606b14919da8389867798f2ed9b9dc5
-        with:
-          operation: conformance
-          bun-version: 1.4.0
-          report-path: .artifacts/coding-tooling/conformance.json
       - name: Run full deterministic validation
         uses: moritzbrantner/coding-tooling@190f06c17606b14919da8389867798f2ed9b9dc5
         with:
@@ -34,3 +28,9 @@ jobs:
           strict: "true"
           bun-version: 1.4.0
           report-path: .artifacts/coding-tooling/full.json
+      - name: Check repository conformance
+        uses: moritzbrantner/coding-tooling@190f06c17606b14919da8389867798f2ed9b9dc5
+        with:
+          operation: conformance
+          bun-version: 1.4.0
+          report-path: .artifacts/coding-tooling/conformance.json
