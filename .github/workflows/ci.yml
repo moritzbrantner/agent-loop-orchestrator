@@ -25,7 +25,8 @@ jobs:
         env:
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
-          git add package.json bun.lock web/bun.lock web/bun.lockb .coding-tooling.json
+          git add package.json bun.lock .coding-tooling.json
+          git add -u web/bun.lock
           if git diff --cached --quiet; then
             echo "Bun workspace boundary already normalized."
             exit 0
