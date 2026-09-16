@@ -680,7 +680,6 @@ fn emit_control(result: Result<(&'static str, Value)>) {
                 "kind": kind,
                 "data": data,
             })
-            .to_string()
         ),
         Err(error) => println!(
             "{}",
@@ -692,7 +691,6 @@ fn emit_control(result: Result<(&'static str, Value)>) {
                     "message": format!("{error:#}"),
                 }
             })
-            .to_string()
         ),
     }
 }
