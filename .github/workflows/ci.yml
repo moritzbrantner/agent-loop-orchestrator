@@ -6,13 +6,15 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   rust:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
       - name: Install Bubblewrap
         run: |
           sudo apt-get update
@@ -58,13 +60,16 @@ jobs:
             --root . \
             --conventions-root .ci-tools/coding-agent-conventions \
             --json
-      - name: Upload convention snapshot
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: issue-18-conventions
-          path: |
-            conventions.json
-            conventions.lock.json
-            .conventions
-          if-no-files-found: error
-          include-hidden-files: true
+      - name: Commit generated convention snapshot
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          git add conventions.json conventions.lock.json .conventions
+          if git diff --cached --quiet; then
+            echo "Convention snapshot already committed."
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "Install deterministic repository conventions"
+          git push origin "HEAD:${HEAD_REF}"
