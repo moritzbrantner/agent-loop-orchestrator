@@ -29,7 +29,9 @@ export function App() {
   const previousActive = useRef<string | null>(null);
 
   const loadDashboard = useCallback(async () => {
-    if (!token) return;
+    if (!token) {
+      return;
+    }
     try {
       const next = await getDashboard(token);
       const wasActive = previousActive.current;
@@ -55,29 +57,41 @@ export function App() {
     loadDashboard().catch((reason) => setError(messageFor(reason)));
   }, [loadDashboard]);
   useEffect(() => {
-    if (!token) return;
+    if (!token) {
+      return;
+    }
     const controller = new AbortController();
     const connect = async () => {
       try {
         const response = await fetch("/api/events", { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal });
-        if (!response.ok || !response.body) throw new Error("Could not connect to live updates.");
+        if (!response.ok || !response.body) {
+          throw new Error("Could not connect to live updates.");
+        }
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
         while (!controller.signal.aborted) {
           const next = await reader.read();
-          if (next.done) break;
+          if (next.done) {
+            break;
+          }
           buffer += decoder.decode(next.value, { stream: true });
           const events = buffer.split("\n\n");
           buffer = events.pop() ?? "";
-          for (const rawEvent of events) await handleEvent(rawEvent, setDashboard, loadDashboard);
+          for (const rawEvent of events) {
+            await handleEvent(rawEvent, setDashboard, loadDashboard);
+          }
         }
       } catch (reason) {
-        if (!controller.signal.aborted) setError(messageFor(reason));
+        if (!controller.signal.aborted) {
+          setError(messageFor(reason));
+        }
       }
     };
     connect().catch((reason) => {
-      if (!controller.signal.aborted) setError(messageFor(reason));
+      if (!controller.signal.aborted) {
+        setError(messageFor(reason));
+      }
     });
     return () => controller.abort();
   }, [token, loadDashboard]);
@@ -101,7 +115,9 @@ export function App() {
     }
   };
 
-  if (!token) return <Unlock onUnlock={(submitted) => { sessionStorage.setItem(sessionTokenKey, submitted); setToken(submitted); }} />;
+  if (!token) {
+    return <Unlock onUnlock={(submitted) => { sessionStorage.setItem(sessionTokenKey, submitted); setToken(submitted); }} />;
+  }
   return <main className="shell">
     <header className="masthead"><div><p className="eyebrow">LOCAL AGENT CONTROL</p><h1>Agent Loop</h1></div><button className="quiet" onClick={() => void Notification.requestPermission()}>Enable desktop notifications</button></header>
     {error && <p className="error" role="alert">{error}</p>}
@@ -164,13 +180,19 @@ function RunCard({ run, onDecision, onCancel }: { run: Run; onDecision: (decisio
 function Empty({ label }: { label: string }) { return <div className="empty"><p>{label}</p></div>; }
 async function handleEvent(rawEvent: string, setDashboard: Dispatch<SetStateAction<Dashboard | null>>, refresh: () => Promise<void>) {
   const data = rawEvent.split("\n").find((line) => line.startsWith("data: "))?.slice(6);
-  if (!data) return;
+  if (!data) {
+    return;
+  }
   let event: EventMessage | null = null;
   try { event = parseEvent(data); } catch { return; }
-  if (!event) return;
+  if (!event) {
+    return;
+  }
   if (event.kind === "state") { await refresh(); return; }
   const line = outputLineSchema.safeParse(event.line);
-  if (!line.success || !event.runId) return;
+  if (!line.success || !event.runId) {
+    return;
+  }
   setDashboard((current) => current && ({ ...current, runs: current.runs.map((run) => run.id === event.runId ? { ...run, output: [...run.output, line.data] } : run) }));
 }
 function messageFor(reason: unknown) { return reason instanceof Error ? reason.message : "Something unexpected went wrong."; }
