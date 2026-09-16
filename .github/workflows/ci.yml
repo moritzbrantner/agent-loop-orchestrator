@@ -2,44 +2,37 @@ name: CI
 
 on:
   pull_request:
+  push:
+    branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  repair:
-    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'converge/complete-issue-18'
+  validate:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with:
-          bun-version: 1.4.0
-      - name: Materialize deterministic repairs
+      - name: Install Bubblewrap
         run: |
-          bun add --dev --exact oxlint-tsgolint@7.0.2001
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path("src/cli.rs")
-          text = path.read_text()
-          start = text.index("fn emit_control")
-          end = text.index("\nfn control_error_code", start)
-          block = text[start:end]
-          if block.count(".to_string()") != 2:
-              raise SystemExit("expected exactly two emit_control to_string calls")
-          block = block.replace("\n            .to_string()", "")
-          path.write_text(text[:start] + block + text[end:])
-          PY
-          cargo fmt --all
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add package.json bun.lock src/cli.rs
-          if git diff --cached --quiet; then
-            echo "repairs already materialized"
-            exit 0
-          fi
-          git commit -m "fix: satisfy strict convention tooling"
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap
+          sudo chmod u+s "$(command -v bwrap)"
+      - name: Install Rust
+        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
+      - name: Fetch Rust dependencies
+        run: cargo fetch --locked
+      - name: Run full deterministic validation
+        uses: moritzbrantner/coding-tooling@190f06c17606b14919da8389867798f2ed9b9dc5
+        with:
+          operation: run
+          tier: full
+          strict: "true"
+          bun-version: 1.4.0
+          report-path: .artifacts/coding-tooling/full.json
+      - name: Check repository conformance
+        uses: moritzbrantner/coding-tooling@190f06c17606b14919da8389867798f2ed9b9dc5
+        with:
+          operation: conformance
+          bun-version: 1.4.0
+          report-path: .artifacts/coding-tooling/conformance.json
