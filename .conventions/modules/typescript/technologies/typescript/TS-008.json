@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "ruleId": "TS-008",
+  "enforcement": {
+    "kind": "oxlint",
+    "technologies": ["typescript"],
+    "config": {
+      "plugins": ["import"],
+      "rules": {
+        "import/no-duplicates": ["error", { "preferInline": true }]
+      }
+    }
+  }
+}

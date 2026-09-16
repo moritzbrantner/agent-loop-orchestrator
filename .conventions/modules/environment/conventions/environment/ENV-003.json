@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "ruleId": "ENV-003",
+  "enforcement": {
+    "kind": "builtin",
+    "check": "env-example"
+  }
+}
