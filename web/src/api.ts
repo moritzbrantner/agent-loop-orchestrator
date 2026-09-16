@@ -125,7 +125,9 @@ async function request<T>(path: string, token: string, schema: z.ZodType<T>, ini
     const body = errorSchema.safeParse(await response.json().catch(() => ({})));
     throw new ApiError(body.success ? body.data.error : "The service rejected this request.", response.status);
   }
-  if (response.status === 204) return undefined as T;
+  if (response.status === 204) {
+    return undefined as T;
+  }
   return schema.parse(await response.json());
 }
 
