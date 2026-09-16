@@ -1,0 +1,2 @@
+# Generated dashboard output is built from src/ and must not be linted as source.
+dist/

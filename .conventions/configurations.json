@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "configurations": [
+    {
+      "rule": "TS-003",
+      "path": "modules/typescript/technologies/typescript/TS-003.oxlint.json",
+      "tool": "oxlint",
+      "capability": "lint",
+      "module": "typescript"
+    },
+    {
+      "rule": "TS-007",
+      "path": "modules/typescript/technologies/typescript/TS-007.oxlint.json",
+      "tool": "oxlint",
+      "capability": "lint",
+      "module": "typescript"
+    },
+    {
+      "rule": "TS-008",
+      "path": "modules/typescript/technologies/typescript/TS-008.oxlint.json",
+      "tool": "oxlint",
+      "capability": "lint",
+      "module": "typescript"
+    },
+    {
+      "rule": "TS-008",
+      "path": "modules/typescript/technologies/typescript/TS-008.oxfmt.json",
+      "tool": "oxfmt",
+      "capability": "format:check",
+      "module": "typescript"
+    }
+  ]
+}

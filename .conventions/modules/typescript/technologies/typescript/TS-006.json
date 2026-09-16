@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "ruleId": "TS-006",
+  "enforcement": {
+    "kind": "oxlint",
+    "technologies": ["typescript"],
+    "config": {
+      "options": {
+        "typeAware": true
+      },
+      "rules": {
+        "typescript/no-floating-promises": [
+          "error",
+          {
+            "ignoreVoid": false
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "ruleId": "TS-005",
+  "enforcement": {
+    "kind": "oxlint",
+    "technologies": ["typescript"],
+    "config": {
+      "options": {
+        "typeAware": true
+      },
+      "rules": {
+        "typescript/switch-exhaustiveness-check": [
+          "error",
+          {
+            "considerDefaultExhaustiveForUnions": false
+          }
+        ]
+      }
+    }
+  }
+}

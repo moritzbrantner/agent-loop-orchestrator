@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "ruleId": "REACT-004",
+  "enforcement": {
+    "kind": "oxlint",
+    "technologies": ["react"],
+    "config": {
+      "plugins": ["react"],
+      "rules": {
+        "react/no-deriving-state-in-effects": "error",
+        "react/set-state-in-effect": "off"
+      }
+    }
+  }
+}

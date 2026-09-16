@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "ruleId": "TS-003",
+  "enforcement": {
+    "kind": "oxlint",
+    "technologies": ["typescript"],
+    "config": {
+      "plugins": ["typescript"],
+      "rules": {
+        "typescript/consistent-type-definitions": ["error", "type"]
+      }
+    }
+  }
+}

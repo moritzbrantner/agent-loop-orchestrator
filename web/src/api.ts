@@ -111,19 +111,23 @@ export class ApiError extends Error {
 const errorSchema = z.object({ error: z.string() });
 
 async function request<T>(path: string, token: string, schema: z.ZodType<T>, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  headers.set("Authorization", `Bearer ${token}`);
+  if (init?.body && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
   const response = await fetch(path, {
     ...init,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(init?.body ? { "Content-Type": "application/json" } : {}),
-      ...init?.headers,
-    },
+    headers,
   });
   if (!response.ok) {
     const body = errorSchema.safeParse(await response.json().catch(() => ({})));
     throw new ApiError(body.success ? body.data.error : "The service rejected this request.", response.status);
   }
-  if (response.status === 204) return undefined as T;
+  if (response.status === 204) {
+    return undefined as T;
+  }
   return schema.parse(await response.json());
 }
 

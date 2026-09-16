@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  rust:
+  validate:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -20,21 +20,19 @@ jobs:
           sudo chmod u+s "$(command -v bwrap)"
       - name: Install Rust
         run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
-      - name: Format
-        run: cargo fmt --all --check
-      - name: Lint
-        run: cargo clippy --all-targets --all-features -- -D warnings
-      - name: Test
-        run: cargo test --all-targets --all-features
-      - name: Check setup scripts
-        run: bash -n setup.sh scripts/setup.sh
-      - name: Install Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - name: Fetch Rust dependencies
+        run: cargo fetch --locked
+      - name: Run full deterministic validation
+        uses: moritzbrantner/coding-tooling@190f06c17606b14919da8389867798f2ed9b9dc5
         with:
+          operation: run
+          tier: full
+          strict: "true"
           bun-version: 1.4.0
-      - name: Install dashboard dependencies
-        working-directory: web
-        run: bun install --frozen-lockfile
-      - name: Build dashboard
-        working-directory: web
-        run: bun run build
+          report-path: .artifacts/coding-tooling/full.json
+      - name: Check repository conformance
+        uses: moritzbrantner/coding-tooling@190f06c17606b14919da8389867798f2ed9b9dc5
+        with:
+          operation: conformance
+          bun-version: 1.4.0
+          report-path: .artifacts/coding-tooling/conformance.json

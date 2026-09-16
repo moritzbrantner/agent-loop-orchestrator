@@ -1,0 +1,9 @@
+import type { ReactNode } from "react";
+
+export type {{name | pascal}}Props = {
+  children?: ReactNode;
+};
+
+export function {{name | pascal}}({ children }: {{name | pascal}}Props) {
+  return <div>{children}</div>;
+}
