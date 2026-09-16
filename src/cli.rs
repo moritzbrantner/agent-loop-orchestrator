@@ -674,25 +674,25 @@ fn emit_control(result: Result<(&'static str, Value)>) {
     match result {
         Ok((kind, data)) => println!(
             "{}",
-            serde_json::to_string(&json!({
+            json!({
                 "schemaVersion": 1,
                 "ok": true,
                 "kind": kind,
                 "data": data,
-            }))
-            .expect("serialize control response")
+            })
+            .to_string()
         ),
         Err(error) => println!(
             "{}",
-            serde_json::to_string(&json!({
+            json!({
                 "schemaVersion": 1,
                 "ok": false,
                 "error": {
                     "code": control_error_code(&error),
                     "message": format!("{error:#}"),
                 }
-            }))
-            .expect("serialize control error")
+            })
+            .to_string()
         ),
     }
 }
