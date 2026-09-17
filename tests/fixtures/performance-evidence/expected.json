@@ -1,0 +1,97 @@
+{
+  "schema_version": "1.0.0",
+  "scenario": {
+    "id": "agent/implementation-attempt",
+    "description": "One coding-agent implementation attempt measured for computational cost and time-to-green.",
+    "workload": {
+      "id": "repository-task-v1",
+      "hash": "sha256:25efe1f4fbef3019080da9ba96160bef3b86839957f52bc2c626a99a40a886da",
+      "parameters": {
+        "task_id": "018f5d42-7c2a-7b37-a912-3c7343db8b3f",
+        "project_id": "physics-engine",
+        "repository": "moritzbrantner/physics-engine",
+        "baseline_revision": "0123456789abcdef0123456789abcdef01234567"
+      }
+    }
+  },
+  "source": {
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "dirty": false,
+    "repository": "https://github.com/moritzbrantner/physics-engine"
+  },
+  "environment": {
+    "fingerprint": "sha256:5cd8c35f170ecec71c8fb8ec66852896c99043f211188022c6415fc1bdcf3897",
+    "toolchain": {
+      "agent_provider": "example-provider",
+      "agent_model": "example-model"
+    },
+    "collector": {
+      "name": "performance-evidence.agent-loop-efficiency-adapter",
+      "version": "1.0.0"
+    }
+  },
+  "measurements": {
+    "useful_work": [
+      {
+        "name": "agent.candidate_produced",
+        "value": 1,
+        "unit": "count",
+        "measurement_type": "counter"
+      }
+    ],
+    "induced_work": [
+      {
+        "name": "agent.input_tokens",
+        "value": 18420,
+        "unit": "token",
+        "measurement_type": "counter"
+      },
+      {
+        "name": "agent.output_tokens",
+        "value": 4932,
+        "unit": "token",
+        "measurement_type": "counter"
+      },
+      {
+        "name": "agent.cached_input_tokens",
+        "value": 6400,
+        "unit": "token",
+        "measurement_type": "counter"
+      }
+    ],
+    "outcomes": [
+      {
+        "name": "agent.cost",
+        "value": 0.42,
+        "unit": "usd",
+        "measurement_type": "gauge"
+      },
+      {
+        "name": "agent.execution_time",
+        "value": 81234,
+        "unit": "ms",
+        "measurement_type": "duration"
+      },
+      {
+        "name": "agent.deterministic_time_to_green",
+        "value": 117000,
+        "unit": "ms",
+        "measurement_type": "duration"
+      }
+    ]
+  },
+  "extensions": {
+    "agent.execution": {
+      "task_id": "018f5d42-7c2a-7b37-a912-3c7343db8b3f",
+      "run_id": "018f5d43-4d1c-7fd5-aed5-d451fd71c110",
+      "project_id": "physics-engine",
+      "provider": "example-provider",
+      "attempt_number": 1,
+      "resumed_provider_session": false,
+      "model": "example-model",
+      "outcome": "passed",
+      "ci_run_ids": [123456789],
+      "candidate_revision": "89abcdef0123456789abcdef0123456789abcdef"
+    }
+  }
+}

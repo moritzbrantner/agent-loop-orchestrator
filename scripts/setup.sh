@@ -79,7 +79,9 @@ fi
 mkdir -p "${PREFIX}/bin"
 echo "Building agent-loop..."
 cargo build --release --manifest-path "${REPOSITORY_ROOT}/Cargo.toml"
-install -m 0755 "${REPOSITORY_ROOT}/target/release/agent-loop" "${PREFIX}/bin/agent-loop"
+for binary in agent-loop agent-loop-efficiency agent-loop-performance-evidence; do
+  install -m 0755 "${REPOSITORY_ROOT}/target/release/${binary}" "${PREFIX}/bin/${binary}"
+done
 
 case ":${PATH}:" in
   *":${PREFIX}/bin:"*) ;;
