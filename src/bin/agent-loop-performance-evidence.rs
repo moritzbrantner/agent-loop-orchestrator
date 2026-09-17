@@ -48,21 +48,44 @@ fn required_u64(attempt: &Map<String, Value>, key: &str) -> Result<u64> {
         .ok_or_else(|| anyhow!("attempt is missing required unsigned integer field {key}"))
 }
 
-fn repository_uri(repository: Option<&Value>) -> Option<String> {
-    let repository = repository?.as_str()?.trim();
-    if repository.is_empty() {
-        return None;
-    }
-    if repository.starts_with("https://") || repository.starts_with("http://") {
-        return Some(repository.to_owned());
-    }
-    let mut parts = repository.split('/');
+fn github_repository_uri(path: &str) -> Option<String> {
+    let path = path.trim_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    let mut parts = path.split('/');
     let owner = parts.next()?;
     let name = parts.next()?;
     if owner.is_empty() || name.is_empty() || parts.next().is_some() {
         return None;
     }
     Some(format!("https://github.com/{owner}/{name}"))
+}
+
+fn repository_uri(repository: Option<&Value>) -> Option<String> {
+    let repository = repository?.as_str()?.trim();
+    if repository.is_empty() {
+        return None;
+    }
+
+    for prefix in [
+        "git@github.com:",
+        "ssh://git@github.com/",
+        "https://github.com/",
+        "http://github.com/",
+        "git://github.com/",
+    ] {
+        if let Some(path) = repository.strip_prefix(prefix) {
+            return github_repository_uri(path);
+        }
+    }
+
+    if repository.starts_with("https://")
+        || repository.starts_with("http://")
+        || repository.starts_with("ssh://")
+    {
+        return Some(repository.to_owned());
+    }
+
+    github_repository_uri(repository)
 }
 
 fn measurement(name: &str, value: Value, unit: &str, measurement_type: &str) -> Value {
@@ -344,6 +367,23 @@ mod tests {
             "018f5d43-4d1c-7fd5-aed5-d451fd71c110.attempt-1.performance-evidence.json"
         );
         assert_eq!(converted[0].1, expected);
+    }
+
+    #[test]
+    fn normalizes_github_repository_remote_forms() {
+        for repository in [
+            "moritzbrantner/physics-engine",
+            "https://github.com/moritzbrantner/physics-engine.git",
+            "http://github.com/moritzbrantner/physics-engine.git",
+            "git://github.com/moritzbrantner/physics-engine.git",
+            "git@github.com:moritzbrantner/physics-engine.git",
+            "ssh://git@github.com/moritzbrantner/physics-engine.git",
+        ] {
+            assert_eq!(
+                repository_uri(Some(&Value::from(repository))).as_deref(),
+                Some("https://github.com/moritzbrantner/physics-engine")
+            );
+        }
     }
 
     #[test]
