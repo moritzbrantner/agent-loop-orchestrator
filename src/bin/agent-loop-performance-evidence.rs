@@ -329,7 +329,8 @@ fn main() -> Result<()> {
 mod tests {
     use super::*;
 
-    const REPORT: &str = include_str!("../../tests/fixtures/performance-evidence/agent-loop-efficiency-report.json");
+    const REPORT: &str =
+        include_str!("../../tests/fixtures/performance-evidence/agent-loop-efficiency-report.json");
     const EXPECTED: &str = include_str!("../../tests/fixtures/performance-evidence/expected.json");
 
     #[test]
@@ -390,7 +391,13 @@ mod tests {
         let report = json!({"attempts": attempts});
         let converted = convert_report(&report, false).expect("bulk conversion");
         assert_eq!(converted.len(), 2_000);
-        assert_eq!(converted.first().expect("first").0, "run-1.attempt-1.performance-evidence.json");
-        assert_eq!(converted.last().expect("last").0, "run-2000.attempt-2000.performance-evidence.json");
+        assert_eq!(
+            converted.first().expect("first").0,
+            "run-1.attempt-1.performance-evidence.json"
+        );
+        assert_eq!(
+            converted.last().expect("last").0,
+            "run-2000.attempt-2000.performance-evidence.json"
+        );
     }
 }
