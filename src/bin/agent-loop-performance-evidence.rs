@@ -41,6 +41,17 @@ fn required_str<'a>(attempt: &'a Map<String, Value>, key: &str) -> Result<&'a st
         .ok_or_else(|| anyhow!("attempt is missing required string field {key}"))
 }
 
+fn optional_str<'a>(attempt: &'a Map<String, Value>, key: &str) -> Result<Option<&'a str>> {
+    match attempt.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .map(Some)
+            .ok_or_else(|| anyhow!("attempt field {key} must be a non-empty string when present")),
+    }
+}
+
 fn required_u64(attempt: &Map<String, Value>, key: &str) -> Result<u64> {
     attempt
         .get(key)
@@ -129,6 +140,7 @@ fn push_optional_measurement(
 fn convert_attempt(attempt: &Map<String, Value>, source_dirty: bool) -> Result<Value> {
     let task_id = required_str(attempt, "taskId")?;
     let run_id = required_str(attempt, "runId")?;
+    let attempt_id = optional_str(attempt, "attemptId")?;
     let project_id = required_str(attempt, "projectId")?;
     let baseline_sha = required_str(attempt, "baselineSha")?;
     let provider = required_str(attempt, "provider")?;
@@ -214,6 +226,9 @@ fn convert_attempt(attempt: &Map<String, Value>, source_dirty: bool) -> Result<V
     let mut extension = Map::new();
     extension.insert("task_id".into(), Value::from(task_id));
     extension.insert("run_id".into(), Value::from(run_id));
+    if let Some(attempt_id) = attempt_id {
+        extension.insert("attempt_id".into(), Value::from(attempt_id));
+    }
     extension.insert("project_id".into(), Value::from(project_id));
     extension.insert("provider".into(), Value::from(provider));
     extension.insert("attempt_number".into(), Value::from(attempt_number));
@@ -370,6 +385,25 @@ mod tests {
     }
 
     #[test]
+    fn accepts_historical_report_without_attempt_id() {
+        let mut report: Value = serde_json::from_str(REPORT).expect("report fixture");
+        report["attempts"][0]
+            .as_object_mut()
+            .expect("attempt object")
+            .remove("attemptId");
+        let converted = convert_report(&report, false).expect("convert historical report");
+        assert!(converted[0].1["extensions"]["agent.execution"]["attempt_id"].is_null());
+    }
+
+    #[test]
+    fn rejects_empty_attempt_id() {
+        let mut report: Value = serde_json::from_str(REPORT).expect("report fixture");
+        report["attempts"][0]["attemptId"] = Value::from("");
+        let error = convert_report(&report, false).expect_err("empty attemptId must fail");
+        assert!(error.to_string().contains("attemptId"));
+    }
+
+    #[test]
     fn normalizes_github_repository_remote_forms() {
         for repository in [
             "moritzbrantner/physics-engine",
@@ -424,6 +458,7 @@ mod tests {
             .map(|number| {
                 let mut attempt = base.clone();
                 attempt["runId"] = Value::from(format!("run-{number}"));
+                attempt["attemptId"] = Value::from(format!("run-{number}-attempt-{number}"));
                 attempt["attemptNumber"] = Value::from(number);
                 attempt
             })
