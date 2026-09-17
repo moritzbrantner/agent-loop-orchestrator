@@ -84,6 +84,7 @@
     "agent.execution": {
       "task_id": "018f5d42-7c2a-7b37-a912-3c7343db8b3f",
       "run_id": "018f5d43-4d1c-7fd5-aed5-d451fd71c110",
+      "attempt_id": "018f5d43-4d1c-7fd5-aed5-d451fd71c110-attempt-1",
       "project_id": "physics-engine",
       "provider": "example-provider",
       "attempt_number": 1,
