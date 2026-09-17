@@ -77,6 +77,7 @@ struct Summary {
 struct AttemptEvidence {
     task_id: Uuid,
     run_id: Uuid,
+    attempt_id: String,
     project_id: String,
     repository: Option<String>,
     baseline_sha: String,
@@ -396,6 +397,7 @@ fn main() -> Result<()> {
             attempts.push(AttemptEvidence {
                 task_id: work_item.id,
                 run_id: run.id,
+                attempt_id: attempt.attempt_id.clone(),
                 project_id: run.project_id.clone(),
                 repository: run.contract.project.repository.clone(),
                 baseline_sha: run.contract.baseline.git_sha.clone(),
