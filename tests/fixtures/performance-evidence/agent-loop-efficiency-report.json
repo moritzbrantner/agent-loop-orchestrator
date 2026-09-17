@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "kind": "task-efficiency",
+  "attempts": [
+    {
+      "taskId": "018f5d42-7c2a-7b37-a912-3c7343db8b3f",
+      "runId": "018f5d43-4d1c-7fd5-aed5-d451fd71c110",
+      "projectId": "physics-engine",
+      "repository": "moritzbrantner/physics-engine",
+      "baselineSha": "0123456789abcdef0123456789abcdef01234567",
+      "candidateSha": "89abcdef0123456789abcdef0123456789abcdef",
+      "provider": "example-provider",
+      "model": "example-model",
+      "resumedProviderSession": false,
+      "attemptNumber": 1,
+      "executionMs": 81234,
+      "outcome": "passed",
+      "failureReason": null,
+      "escalationReason": null,
+      "environment": {
+        "fingerprintVersion": "1",
+        "profile": "default",
+        "expected": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "verified": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "matched": true
+      },
+      "deterministicTimeToGreenMs": 117000,
+      "ciRunIds": [123456789],
+      "usage": {
+        "inputTokens": 18420,
+        "outputTokens": 4932,
+        "cachedInputTokens": 6400,
+        "totalTokens": 23352,
+        "costUsd": 0.42,
+        "source": "events"
+      }
+    }
+  ]
+}
