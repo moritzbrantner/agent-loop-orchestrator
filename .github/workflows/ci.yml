@@ -23,15 +23,45 @@ jobs:
       - name: Fetch Rust dependencies
         run: cargo fetch --locked
       - name: Run full deterministic validation
-        uses: moritzbrantner/coding-tooling@190f06c17606b14919da8389867798f2ed9b9dc5
+        uses: moritzbrantner/coding-tooling@a630598d369ac94d0f549dce5c859b9dd28b250c
         with:
           operation: run
           tier: full
           strict: "true"
           bun-version: 1.4.0
           report-path: .artifacts/coding-tooling/full.json
+      - name: Detect structural validation changes
+        id: structure
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "workflow_dispatch" || -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          fi
+
+          changed=false
+          while IFS= read -r path; do
+            case "$path" in
+              .coding-tooling.json|.coding-tooling.expectations.json|.coding-tooling.dependencies.json|.coding-tooling.source-deps.json|.repository-environment.toml|AGENTS.md|renovate.json|package.json|bun.lock|package-lock.json|pnpm-lock.yaml|yarn.lock|rust-toolchain.toml|Cargo.toml|Cargo.lock|Dockerfile*|docker-compose*.yml|compose*.yml|tsconfig*.json|scripts/codex-environment.sh|.github/dependabot.yml|.github/workflows/*|.github/actions/*|.conventions/*|.devcontainer/*|*/Cargo.toml|*/Cargo.lock|*/package.json|*/tsconfig*.json)
+                changed=true
+                break
+                ;;
+            esac
+          done < <(git diff --name-only "$BASE_SHA" HEAD)
+
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+
       - name: Check repository conformance
-        uses: moritzbrantner/coding-tooling@190f06c17606b14919da8389867798f2ed9b9dc5
+        if: steps.structure.outputs.changed == 'true'
+        uses: moritzbrantner/coding-tooling@a630598d369ac94d0f549dce5c859b9dd28b250c
         with:
           operation: conformance
           bun-version: 1.4.0
