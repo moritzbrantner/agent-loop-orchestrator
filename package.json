@@ -1,7 +1,7 @@
 {
   "name": "agent-loop-root",
   "private": true,
-  "packageManager": "bun@1.4.0",
+  "packageManager": "bun@1.4.2",
   "devDependencies": {
     "oxlint": "1.80.0",
     "oxlint-tsgolint": "7.0.2003"
