@@ -1,5 +1,7 @@
 # Agent Loop Orchestrator
 
+> **Retired.** This repository is archived. Coding-agent work now runs through one global work loop over GitHub issues: the `work-loop` and `unblock` skills in [`moritzbrantner/dotfiles`](https://github.com/moritzbrantner/dotfiles/tree/main/skills). GitHub issues and pull requests are the only work state; repositories keep their own `AGENTS.md`, conventions and validation.
+
 An optional single-user localhost coordination layer for coding-agent workloads that need durable work items, isolated execution, run state, candidate decisions, or local integration.
 
 Direct human-to-agent work, standalone skills, deterministic tooling, and lightweight iterative loops do **not** require this repository, `agent-loop init`, or orchestrator registration. The orchestrator is an escalation layer: use it when coordination complexity justifies durable control state.
